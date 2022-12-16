@@ -37,6 +37,7 @@ our $baseTemp;
 our $log;
 our $logWrites = 0;
 our %conf;
+our @includedOrgUnitIDs;
 
 
 GetOptions(
@@ -51,124 +52,130 @@ checkCMDArgs();
 
 setupDB();
 
-# start();
+start();
 
 
 
 sub start {
-    my $dt = DateTime->now(time_zone => "local");
-    my $fdate = $dt->ymd;
+
     log_write(" ---------------- Script Starting ---------------- ", 1);
     print "Executing job tail the log for information (".$conf{"logfile"}.")\n";
-
 
     $baseTemp = $conf{"tempdir"};
     $baseTemp =~ s/\/$//;
     $baseTemp .= '/';
+    my $libraryname = trim($conf{"libraryname"});
+    @includedOrgUnitIDs = @{getOrgUnits($libraryname)};
+    makeDataFile("circs");
+    my $subject = trim($conf{"emailsubjectline"});
 
 
-    my @header=("isbn","itemid","bibrecordcallno","bibrecordid","title");
-    my @rows = ([@header]);
-    writeData($file,\@rows,1);
-    my $count = 0;
-    while( $offset < $maxID )
-    {
-        @isbns = @{getList($libraryname,$limit,$offset)};
-        $count+=(scalar @isbns);
-        $fileOutputBufferRecordCount = 30000 if($offset+$limit > $maxID); # Need to ensure that we write all of this last loop's data to the file
-        writeData($file,\@isbns);
-        $offset+=$limit;
-    }
-    log_write("Received $count rows from database - writing to $file", 1);
-    log_write("finished $file", 1);
-    my @files = ($file);
+    # log_write("Received $count rows from database - writing to $file", 1);
+    # log_write("finished $file", 1);
+    # my @files = ($file);
 
-    sendftp($conf{"ftphost"},$conf{"ftplogin"},$conf{"ftppass"},$conf{"remote_directory"}, \@files, $log);
+    # sendftp($conf{"ftphost"},$conf{"ftplogin"},$conf{"ftppass"},$conf{"remote_directory"}, \@files, $log);
 
-    my @tolist = ($conf{"alwaysemail"});
-    my $email = new email($conf{"fromemail"},\@tolist,$valid,1,\%conf);
-    my $afterProcess = DateTime->now(time_zone => "local");
-    my $difference = $afterProcess - $dt;
-    my $format = DateTime::Format::Duration->new(pattern => '%M:%S');
-    my $duration =  $format->format_duration($difference);
-    my @s = split(/\//,$file);
-    my $displayFilename = @s[$#s];
-    $email->send("$subject","Duration: $duration\r\nTotal Extracted: $count\r\nFilename: $displayFilename\r\nFTP Directory: ".$conf{"remote_directory"}."\r\nThis is a full replacement\r\n-Evergreen Perl Squad-");
-    foreach(@files)
-    {
-        unlink $_ or warn "Could not remove $_\n";
-    }
+    # my @tolist = ($conf{"alwaysemail"});
+    # my $email = new email($conf{"fromemail"},\@tolist,$valid,1,\%conf);
+    # my $afterProcess = DateTime->now(time_zone => "local");
+    # my $difference = $afterProcess - $dt;
+    # my $format = DateTime::Format::Duration->new(pattern => '%M:%S');
+    # my $duration =  $format->format_duration($difference);
+    # my @s = split(/\//,$file);
+    # my $displayFilename = @s[$#s];
+    # $email->send("$subject","Duration: $duration\r\nTotal Extracted: $count\r\nFilename: $displayFilename\r\nFTP Directory: ".$conf{"remote_directory"}."\r\nThis is a full replacement\r\n-Evergreen Perl Squad-");
+    # foreach(@files)
+    # {
+        # unlink $_ or warn "Could not remove $_\n";
+    # }
 
     log_write(" ---------------- Script Ending ---------------- ", 1);
     close($log);
 }
 
-# sub writeData
-# {
-    # my $file = @_[0];
-    # my @isbns = @{@_[1]};
-    # my $overwriteFile = @_[2] || 0;
-
-    # foreach(@isbns)
-    # {
-        # my $row = $_;
-        # my @row = @{$row};
-        # $fileOutputBuffer .= join("\t",@row);
-        # $fileOutputBuffer .= "\n";
-        # $fileOutputBufferRecordCount++;
-    # }
-    # if($overwriteFile)
-    # {
-        # my $outputFile = new Loghandler($file);
-        # $fileOutputBuffer = substr($fileOutputBuffer,0,-1);
-        # $outputFile->truncFile($fileOutputBuffer);
-        # $fileOutputBuffer = '';
-        # $fileOutputBufferRecordCount = 0;
-        # undef $outputFile;
-    # }
-    # # write to disk at a reasonable pace, 20000 lines at a time.
-    # if($fileOutputBufferRecordCount > 20000)
-    # {
-        # my $outputFile = new Loghandler($file);
-        # $outputFile->appendLine($fileOutputBuffer);
-        # log_write("wrote $fileOutputBufferRecordCount lines to $file", 1);
-        # $fileOutputBuffer = '';
-        # $fileOutputBufferRecordCount = 0;
-        # undef $outputFile;
-    # }
-# }
-
 sub makeDataFile
 {
     my $type = shift;
-    my $libraryname = trim($conf{"libraryname"});
+    my $dt = DateTime->now(time_zone => "local");
+    my $fdate = $dt->ymd;
+    my %funcMap =
+    (
+        'bibs' => {"chunk" => "getSQLFunctionChunk", "ids" => "getBibIDs"},
+        'items' => {"chunk" => "getSQLFunctionChunk", "ids" => "getItemIDs"},
+        'circs' => {"chunk" => "getSQLFunctionChunk", "ids" => "getCircIDs"},
+    );
+    
 
-    my $subject = trim($conf{"emailsubjectline"});
-    my $filenameprefix = $type . '_' . trim($conf{"filenameprefix"});
+    my $filenameprefix = trim($conf{"filenameprefix"}) . '_' .$type;
     my $limit = $conf{'chunksize'} || 10000;
-    my $offset = 1;
-    my @isbns = ('data');
-    my $file = chooseNewFileName($baseTemp, $filenameprefix . "_".$fdate, "csv");
+    my $offset = 0;
+    my $file = chooseNewFileName($baseTemp, $filenameprefix . "_".$fdate, "tsv");
+    print "Creating: $file\n";
+    my $fileHandle = startFile($file);
+    my @ids;
+    my $perlIDEval = '@ids = @{' . $funcMap{$type}{"ids"} . '(\@includedOrgUnitIDs, $limit, $offset)};';
+    my $firstTime = 1;
+    eval $perlIDEval;
+    while($#ids > -1)
+    {
+        my @data;
+        my $perlChunkCode = '@data = @{' . $funcMap{$type}{"chunk"}  . '(\@ids, "' . $type.'")};';
+        eval $perlChunkCode;
 
+        #last row has header info
+        my $h = pop @data;
+
+        if($firstTime)
+        {
+            $firstTime = 1;
+            my @head = ([@{$h}]);
+            writeData(\@head, $fileHandle);
+        }
+        writeData(\@data, $fileHandle);
+        $offset += $limit;
+        eval $perlIDEval;
+        undef $perlChunkCode;
+        undef $h;
+    }
+    close($fileHandle);
 }
 
-sub getBibs
+sub writeData
+{
+    my $dataRef = shift;
+    my @data = @{$dataRef};
+    my $fileHandle = shift;
+    my $output = '';
+    foreach(@data)
+    {
+        my @row = @{$_};
+        $output .= join("\t", @row);
+        $output .= "\n";
+    }
+    print $fileHandle $output;
+}
+
+sub getSQLFunctionChunk
 {
     my $idRef = shift;
+    my $type = shift;
     my @ids = @{$idRef};
     my $pgArray = join(',', @ids);
     $pgArray = "'{$pgArray}'::BIGINT[]";
-    my $query = "select * from libraryiq.get_bibs($pgArray)";
-
-    my @results = @{dbhandler_query($query)};
-    return \@results;
+    my $query = "select * from libraryiq.get_$type($pgArray)";
+    log_write($query) if $debug;
+    return dbhandler_query($query);
 }
 
 sub getBibIDs
 {
-    my $libnames = shift;
-    my @libs = @{getOrgUnits($libnames)};
-    my $pgLibs = join(',',@libs);
+    my $libsRef = shift;
+    my @libs = $libsRef ? @{$libsRef} : ();
+    my $pgLibs = join(',', @libs);
+    my $limit = shift;
+    my $offset = shift;
+    my @ret = ();
     my $query = "
     SELECT bre.id
     FROM
@@ -176,7 +183,104 @@ sub getBibIDs
     JOIN asset.call_number acn on(acn.record=bre.id AND NOT acn.deleted)
     WHERE
     acn.owning_lib in( $pgLibs )
+    GROUP BY 1
     ORDER BY 1";
+    log_write($query) if $debug;
+    my @results = @{getDataChunk($query, $limit, $offset)};
+    pop @results;
+    foreach(@results)
+    {
+        my @row = @{$_};
+        push (@ret, @row[0])
+    }
+    return \@ret;
+}
+
+sub getItemIDs
+{
+    my $libsRef = shift;
+    my @libs = $libsRef ? @{$libsRef} : ();
+    my $pgLibs = join(',', @libs);
+    my $limit = shift;
+    my $offset = shift;
+    my @ret = ();
+    my $query = "
+    SELECT ac.id
+    FROM
+    asset.copy ac
+    JOIN asset.call_number acn on(acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
+    WHERE
+    acn.owning_lib in( $pgLibs )
+    GROUP BY 1
+    ORDER BY 1";
+    log_write($query) if $debug;
+    my @results = @{getDataChunk($query, $limit, $offset)};
+    pop @results;
+    foreach(@results)
+    {
+        my @row = @{$_};
+        push (@ret, @row[0])
+    }
+    return \@ret;
+}
+
+sub getCircIDs
+{
+    my $libsRef = shift;
+    my @libs = $libsRef ? @{$libsRef} : ();
+    my $pgLibs = join(',', @libs);
+    my $limit = shift;
+    my $offset = shift;
+    my @ret = ();
+    my $query = "
+    SELECT acirc.id
+    FROM
+    action.circulation acirc
+    JOIN actor.usr au ON (acirc.usr=au.id)
+    JOIN asset.copy ac ON (ac.id=acirc.target_copy)
+    JOIN asset.call_number acn on(acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
+    WHERE
+    acn.owning_lib in( $pgLibs )
+    GROUP BY 1
+    ORDER BY 1";
+    log_write($query) if $debug;
+    my @results = @{getDataChunk($query, $limit, $offset)};
+    pop @results;
+    foreach(@results)
+    {
+        my @row = @{$_};
+        push (@ret, @row[0])
+    }
+    return \@ret;
+}
+
+sub getPatronIDs
+{
+    my $libsRef = shift;
+    my @libs = $libsRef ? @{$libsRef} : ();
+    my $pgLibs = join(',', @libs);
+    my $limit = shift;
+    my $offset = shift;
+    my @ret = ();
+    my $query = "
+    SELECT au.id
+    FROM
+    actor.usr au
+    JOIN asset.copy ac ON (ac.id=acirc.target_copy)
+    JOIN asset.call_number acn on(acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
+    WHERE
+    au.home_ou in( $pgLibs )
+    GROUP BY 1
+    ORDER BY 1";
+    log_write($query) if $debug;
+    my @results = @{getDataChunk($query, $limit, $offset)};
+    pop @results;
+    foreach(@results)
+    {
+        my @row = @{$_};
+        push (@ret, @row[0])
+    }
+    return \@ret;
 }
 
 sub getDataChunk
@@ -185,9 +289,8 @@ sub getDataChunk
     my $limit = shift;
     my $offset = shift;
     $query .= "\nLIMIT $limit OFFSET $offset";
-    
-    my @results = @{dbhandler_query($query)};
-    return \@ret;
+    log_write($query) if $debug;
+    return dbhandler_query($query);
 }
 
 sub getOrgUnits
@@ -198,7 +301,7 @@ sub getOrgUnits
     # spaces don't belong here
     $libnames =~ s/\s//g;
 
-    my @sp = split(/,/,$libname);
+    my @sp = split(/,/,$libnames);
     
     my $libs = join ( '$$,$$', @sp);
     $libs = '$$' . $libs . '$$';
@@ -210,8 +313,9 @@ sub getOrgUnits
     actor.org_unit
     where lower(shortname) in ($libs)
     order by 1";
-
+    log_write($query) if $debug;
     my @results = @{dbhandler_query($query)};
+    pop @results;
     foreach(@results)
     {
         my @row = @{$_};
@@ -222,7 +326,7 @@ sub getOrgUnits
             push (@ret, @des);
         }
     }
-    return \@ret;
+    return dedupeArray(\@ret);
 }
 
 sub getOrgDescendants
@@ -230,8 +334,10 @@ sub getOrgDescendants
     my $thisOrg = shift;
     my $query = "select id from actor.org_unit_descendants($thisOrg)";
     my @ret = ();
-
+    log_write($query) if $debug;
+    
     my @results = @{dbhandler_query($query)};
+    pop @results;
     foreach(@results)
     {
         my @row = @{$_};
@@ -315,6 +421,7 @@ sub setupDB {
     dbhandler_update($query) if($reCreateDBSchema);
     my $query = "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'libraryiq'";
     my @results = @{dbhandler_query($query)};
+    pop @results; #don't care about headers
     if($#results==-1)
     {
         log_write("Creating Schema: libraryiq", 1);
@@ -634,9 +741,178 @@ splitter
 
 splitter
         dbhandler_update($query);
+
+        $query = <<'splitter';
+
+    CREATE OR REPLACE FUNCTION libraryiq.get_items(bigint[])
+      RETURNS table ( copyid BIGINT, barcode TEXT, bibid BIGINT,
+      isbn TEXT, upc TEXT, collection_code TEXT, mat_type TEXT,
+      branch_location TEXT, owning_branch TEXT, call_number TEXT,
+      shelf_location TEXT, create_date TEXT, status TEXT, last_checkout TEXT, last_checkin_date TEXT,
+      due_date TEXT, ytd_circ_count BIGINT, circ_count BIGINT ) AS
+    $BODY$
+
+      DECLARE
+        copy_id_array ALIAS FOR $1;
+        cid BIGINT;
+
+      BEGIN
+
+        FOREACH cid IN ARRAY copy_id_array
+        LOOP
+            SELECT
+            ac.id,
+            ac.barcode,
+            acn.record,
+            libraryiq.attempt_isbn(acn.record::BIGINT),
+            libraryiq.attempt_upc(acn.record::BIGINT),
+            acl.name,
+            ac.circ_modifier,
+            aou_circ.shortname,
+            aou_owner.shortname,
+            btrim(regexp_replace(concat(acnp.label, ' ', acn.label, ' ', acns.label), '\s{2,}', ' ')),
+            acl.name,
+            ac.create_date,
+            ccs.name,
+            chkoutdate.lastcheckout,
+            chkindate.lastcheckin,
+            duedate.due,
+            COALESCE(ytd.ytdcirccount, 0),
+            COALESCE(circcount.tcirccount, 0)
+            
+              INTO
+              copyid, barcode, bibid, isbn, upc, collection_code, mat_type,
+              branch_location, owning_branch, call_number, shelf_location,
+              create_date, status, last_checkout, last_checkin_date, due_date,
+              ytd_circ_count, circ_count
+              FROM
+              asset.copy ac
+              JOIN asset.call_number acn ON (acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
+              LEFT JOIN asset.copy_location acl ON (acl.id=ac.location)
+              JOIN actor.org_unit aou_owner ON (acn.owning_lib=aou_owner.id)
+              JOIN actor.org_unit aou_circ ON (ac.circ_lib=aou_circ.id)
+              JOIN asset.call_number_prefix acnp ON (acnp.id=acn.prefix)
+              JOIN asset.call_number_suffix acns ON (acns.id=acn.suffix)
+              JOIN config.copy_status ccs ON (ccs.id=ac.status)
+              LEFT JOIN (SELECT COUNT(*) "ytdcirccount" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid AND date_part('year', acirc2.xact_start) = date_part('year', now()) ) ytd ON (1=1)
+              LEFT JOIN (SELECT MAX(acirc2.xact_start) "lastcheckout" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid AND acirc2.xact_start IS NOT NULL) chkoutdate ON (1=1)
+              LEFT JOIN (SELECT MAX(acirc2.xact_finish) "lastcheckin" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid AND acirc2.xact_finish IS NOT NULL) chkindate ON (1=1)
+              LEFT JOIN (SELECT MAX(acirc2.due_date) "due" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid AND acirc2.xact_finish IS NULL) duedate ON (1=1)
+              LEFT JOIN (SELECT COUNT(*) "tcirccount" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid) circcount ON (1=1)
+              WHERE
+              ac.id=cid;
+            RETURN NEXT;
+        END LOOP;
+
+      END;
+
+    $BODY$
+      LANGUAGE plpgsql VOLATILE;
+
+splitter
+        dbhandler_update($query);
+
+        $query = <<'splitter';
+
+    CREATE OR REPLACE FUNCTION libraryiq.get_circs(bigint[])
+      RETURNS table ( copyid BIGINT, barcode TEXT, bibid BIGINT,
+      checkout_date TEXT, checkout_branch TEXT, patron_id BIGINT, due_date TEXT,
+      checkin_date TEXT ) AS
+    $BODY$
+
+      DECLARE
+        circ_id_array ALIAS FOR $1;
+        cid BIGINT;
+
+      BEGIN
+
+        FOREACH cid IN ARRAY circ_id_array
+        LOOP
+            SELECT
+            ac.id,
+            ac.barcode,
+            acn.record,
+            acirc.xact_start,
+            aou_circ.shortname,
+            au.id,
+            acirc.due_date,
+            acirc.checkin_time
+              INTO
+              copyid, barcode, bibid,  checkout_date,
+              checkout_branch, patron_id, due_date, checkin_date
+              FROM
+              action.circulation acirc
+              JOIN asset.copy ac ON (ac.id=acirc.target_copy)
+              JOIN asset.call_number acn ON (acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
+              LEFT JOIN asset.copy_location acl ON (acl.id=ac.location)
+              JOIN actor.usr au ON (acirc.usr=au.id)
+              JOIN actor.org_unit aou_circ ON (acirc.circ_lib=aou_circ.id)
+              WHERE
+              acirc.id=cid;
+            RETURN NEXT;
+        END LOOP;
+
+      END;
+
+    $BODY$
+      LANGUAGE plpgsql VOLATILE;
+
+splitter
+        dbhandler_update($query);
+
+        $query = <<'splitter';
+
+    CREATE OR REPLACE FUNCTION libraryiq.get_patrons(bigint[])
+      RETURNS table ( patronid BIGINT, exiration_date TEXT, patron_branch TEXT,
+      patron_status TEXT, patron_circ_ytd BIGINT, patron_prev_year_circ_count BIGINT,
+      patron_circ_count BIGINT, patron_last_active TEXT, patron_last_checkout_date TEXT,
+      patron_create_date TEXT, street1 TEXT, street2 TEXT, city TEXT, zip TEXT) AS
+    $BODY$
+
+      DECLARE
+        patron_id_array ALIAS FOR $1;
+        pid BIGINT;
+
+      BEGIN
+
+        FOREACH pid IN ARRAY patron_id_array
+        LOOP
+            SELECT
+            au.id,
+            au.expire_date,
+            aou.shortname,
+            (CASE WHEN au.barred THEN 'barred' WHEN au.deleted THEN 'deleted' WHEN au.active THEN 'active' ELSE 'inactive' END),
+            ytd.ytdcirccount,
+            prevytd.prvyearcirccount,
+            circcount.tcirccount,
+            
+              INTO
+              patronid, exiration_date, patron_branch, patron_status,
+              patron_circ_ytd, patron_prev_year_circ_count, patron_circ_count, patron_last_active,
+              patron_last_checkout_date, patron_create_date, street1, street2, city, zip
+              FROM
+              actor.usr au
+              JOIN actor.org_unit aou ON (aou.id=au.home_ou)
+              LEFT JOIN (SELECT COUNT(*) "ytdcirccount" FROM action.circulation acirc2 WHERE usr=pid AND date_part('year', xact_start) = date_part('year', now()) ) ytd ON (1=1)
+              LEFT JOIN (SELECT COUNT(*) "prvyearcirccount" FROM action.circulation acirc2 WHERE acirc2.usr=pid AND (date_part('year', xact_start)::INT - 1) = (date_part('year', now())::INT - 1) ) prevytd ON (1=1)
+              LEFT JOIN (SELECT COUNT(*) "tcirccount" FROM action.circulation acirc2 WHERE acirc2.usr=pid ) circcount ON (1=1)
+              LEFT JOIN (SELECT MAX(event_time) "lastact" FROM actor.usr_activity aua WHERE aua.usr=pid ) circcount ON (1=1)
+              WHERE
+              au.id=pid;
+            RETURN NEXT;
+        END LOOP;
+
+      END;
+
+    $BODY$
+      LANGUAGE plpgsql VOLATILE;
+
+splitter
+        dbhandler_update($query);
     }
     undef $query;
 }
+
 
 sub dbhandler_query {
     my $querystring = shift;
@@ -652,13 +928,16 @@ sub dbhandler_query {
         $i++;
     }
     $query->execute();
+
     while ( my $row = $query->fetchrow_arrayref() ) {
-        push( @ret, $row );
+        push( @ret, [@{$row}] );
     }
     undef($querystring);
+    push( @ret, $query->{NAME} );
 
     return \@ret;
 }
+
 
 sub dbhandler_update
 {
@@ -699,6 +978,29 @@ sub dbhandler_setupConnection {
         }
     );
 
+}
+
+sub dedupeArray
+{
+    my $arrRef = shift;
+    my @arr = $arrRef ? @{$arrRef} : ();
+    my %deduper = ();
+    $deduper{$_} = 1 foreach(@arr);
+    my @ret = ();
+    while ((my $key, my $val) = each(%deduper))
+    {
+        push (@ret, $key);
+    }
+    return \@ret;
+}
+
+sub startFile
+{
+    my $filename = shift;
+    my $handle;
+    open($handle, '> ' . $filename );
+    binmode($log, ":utf8");
+    return $handle;
 }
 
 sub log_write
