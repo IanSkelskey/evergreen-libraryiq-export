@@ -38,6 +38,8 @@ our $log;
 our $logWrites = 0;
 our %conf;
 our @includedOrgUnitIDs;
+our $historyID;
+our $lastUpdatePGDate;
 
 
 GetOptions(
@@ -66,13 +68,22 @@ sub start {
     $baseTemp .= '/';
     my $libraryname = trim($conf{"libraryname"});
     @includedOrgUnitIDs = @{getOrgUnits($libraryname)};
-    makeDataFile("circs");
+    my $pgLibs = makeLibList(\@includedOrgUnitIDs);
+
+    checkHistory($pgLibs);
+    # my @loops = ( qw/bibs items circs patrons holds/ );
+    my @loops = ( qw/patrons items/ );
+    my %res = ();
+    $res{$_} = makeDataFile($_, $pgLibs) foreach @loops;
+    log_write(Dumper(\%res));
+    updateHistory();
+    my $tarFile = makeTarGZ(\%res);
+    if($tarFile)
+    {
+
     my $subject = trim($conf{"emailsubjectline"});
-
-
-    # log_write("Received $count rows from database - writing to $file", 1);
-    # log_write("finished $file", 1);
-    # my @files = ($file);
+    }
+    # my @files = ($tarFile);
 
     # sendftp($conf{"ftphost"},$conf{"ftplogin"},$conf{"ftppass"},$conf{"remote_directory"}, \@files, $log);
 
@@ -97,6 +108,7 @@ sub start {
 sub makeDataFile
 {
     my $type = shift;
+    my $pgLibs = shift;
     my $dt = DateTime->now(time_zone => "local");
     my $fdate = $dt->ymd;
     my %funcMap =
@@ -104,6 +116,8 @@ sub makeDataFile
         'bibs' => {"chunk" => "getSQLFunctionChunk", "ids" => "getBibIDs"},
         'items' => {"chunk" => "getSQLFunctionChunk", "ids" => "getItemIDs"},
         'circs' => {"chunk" => "getSQLFunctionChunk", "ids" => "getCircIDs"},
+        'patrons' => {"chunk" => "getSQLFunctionChunk", "ids" => "getPatronIDs"},
+        'holds' => {"chunk" => "getSQLFunctionChunk", "ids" => "getHoldIDs"},
     );
     
 
@@ -114,7 +128,9 @@ sub makeDataFile
     print "Creating: $file\n";
     my $fileHandle = startFile($file);
     my @ids;
-    my $perlIDEval = '@ids = @{' . $funcMap{$type}{"ids"} . '(\@includedOrgUnitIDs, $limit, $offset)};';
+    my $count = 0;
+    
+    my $perlIDEval = '@ids = @{' . $funcMap{$type}{"ids"} . '($pgLibs, $limit, $offset)};';
     my $firstTime = 1;
     eval $perlIDEval;
     while($#ids > -1)
@@ -128,10 +144,11 @@ sub makeDataFile
 
         if($firstTime)
         {
-            $firstTime = 1;
+            $firstTime = 0;
             my @head = ([@{$h}]);
             writeData(\@head, $fileHandle);
         }
+        $count += $#data;
         writeData(\@data, $fileHandle);
         $offset += $limit;
         eval $perlIDEval;
@@ -139,6 +156,8 @@ sub makeDataFile
         undef $h;
     }
     close($fileHandle);
+    my @ret = ($file, $count);
+    return \@ret;
 }
 
 sub writeData
@@ -170,9 +189,7 @@ sub getSQLFunctionChunk
 
 sub getBibIDs
 {
-    my $libsRef = shift;
-    my @libs = $libsRef ? @{$libsRef} : ();
-    my $pgLibs = join(',', @libs);
+    my $pgLibs = shift;
     my $limit = shift;
     my $offset = shift;
     my @ret = ();
@@ -182,7 +199,8 @@ sub getBibIDs
     biblio.record_entry bre
     JOIN asset.call_number acn on(acn.record=bre.id AND NOT acn.deleted)
     WHERE
-    acn.owning_lib in( $pgLibs )
+    acn.owning_lib in( $pgLibs ) AND
+    ( acn.edit_date > $lastUpdatePGDate OR bre.edit_date > $lastUpdatePGDate )
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
@@ -198,9 +216,7 @@ sub getBibIDs
 
 sub getItemIDs
 {
-    my $libsRef = shift;
-    my @libs = $libsRef ? @{$libsRef} : ();
-    my $pgLibs = join(',', @libs);
+    my $pgLibs = shift;
     my $limit = shift;
     my $offset = shift;
     my @ret = ();
@@ -210,7 +226,8 @@ sub getItemIDs
     asset.copy ac
     JOIN asset.call_number acn on(acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
     WHERE
-    acn.owning_lib in( $pgLibs )
+    acn.owning_lib in( $pgLibs ) AND
+    ( acn.edit_date > $lastUpdatePGDate OR ac.edit_date > $lastUpdatePGDate )
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
@@ -226,9 +243,7 @@ sub getItemIDs
 
 sub getCircIDs
 {
-    my $libsRef = shift;
-    my @libs = $libsRef ? @{$libsRef} : ();
-    my $pgLibs = join(',', @libs);
+    my $pgLibs = shift;
     my $limit = shift;
     my $offset = shift;
     my @ret = ();
@@ -240,7 +255,8 @@ sub getCircIDs
     JOIN asset.copy ac ON (ac.id=acirc.target_copy)
     JOIN asset.call_number acn on(acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
     WHERE
-    acn.owning_lib in( $pgLibs )
+    acn.owning_lib in( $pgLibs ) AND
+    acirc.xact_start > $lastUpdatePGDate
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
@@ -256,9 +272,7 @@ sub getCircIDs
 
 sub getPatronIDs
 {
-    my $libsRef = shift;
-    my @libs = $libsRef ? @{$libsRef} : ();
-    my $pgLibs = join(',', @libs);
+    my $pgLibs = shift;
     my $limit = shift;
     my $offset = shift;
     my @ret = ();
@@ -266,10 +280,10 @@ sub getPatronIDs
     SELECT au.id
     FROM
     actor.usr au
-    JOIN asset.copy ac ON (ac.id=acirc.target_copy)
-    JOIN asset.call_number acn on(acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
     WHERE
-    au.home_ou in( $pgLibs )
+    NOT au.deleted AND
+    au.home_ou in( $pgLibs ) AND
+    au.last_update_time > $lastUpdatePGDate
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
@@ -281,6 +295,44 @@ sub getPatronIDs
         push (@ret, @row[0])
     }
     return \@ret;
+}
+
+sub getHoldIDs
+{
+    my $pgLibs = shift;
+    my $limit = shift;
+    my $offset = shift;
+    my @ret = ();
+    my $query = "
+    SELECT ahr.id
+    FROM
+    action.hold_request ahr
+    WHERE
+    ahr.pickup_lib in( $pgLibs ) AND
+    ahr.cancel_time IS NULL AND
+    (ahr.expire_time IS NULL OR ahr.expire_time > NOW()) AND
+    ahr.fulfillment_time IS NULL AND
+    ahr.request_time > $lastUpdatePGDate
+    GROUP BY 1
+    ORDER BY 1";
+    log_write($query) if $debug;
+    my @results = @{getDataChunk($query, $limit, $offset)};
+    pop @results;
+    foreach(@results)
+    {
+        my @row = @{$_};
+        push (@ret, @row[0])
+    }
+    return \@ret;
+}
+
+sub makeLibList
+{
+    my $libsRef = shift;
+    my @libs = $libsRef ? @{$libsRef} : ();
+    my $pgLibs = join(',', @libs);
+    return -1 if $#libs == -1;
+    return $pgLibs;
 }
 
 sub getDataChunk
@@ -382,7 +434,7 @@ sub checkCMDArgs {
     my $conf = readConfFile($configFile);
     %conf = %{$conf};
 
-    my @reqs = ("logfile","tempdir","libraryname","ftplogin","ftppass","ftphost","remote_directory","emailsubjectline");
+    my @reqs = ("logfile","tempdir","libraryname","ftplogin","ftppass","ftphost","remote_directory","emailsubjectline","archive");
     my @missing = ();
     for my $i (0..$#reqs)
     {
@@ -398,6 +450,12 @@ sub checkCMDArgs {
     if( !-e $conf{"tempdir"})
     {
         print "Temp folder: " . $conf{"tempdir"} . " does not exist.\n";
+        exit 1;
+    }
+
+    if( !-e $conf{"archive"})
+    {
+        print "Archive folder: " . $conf{"archive"} . " does not exist.\n";
         exit 1;
     }
 
@@ -426,6 +484,18 @@ sub setupDB {
     {
         log_write("Creating Schema: libraryiq", 1);
         $query = "CREATE SCHEMA libraryiq";
+        dbhandler_update($query);
+
+        $query = <<'splitter';
+
+    CREATE TABLE libraryiq.history
+    (
+        id serial NOT NULL,
+        key TEXT NOT NULL,
+        last_run TIMESTAMP WITH TIME ZONE DEFAULT '1000-01-01'::TIMESTAMPTZ
+    );
+
+splitter
         dbhandler_update($query);
 
         $query = <<'splitter';
@@ -885,7 +955,14 @@ splitter
             ytd.ytdcirccount,
             prevytd.prvyearcirccount,
             circcount.tcirccount,
-            
+            usr_activity.lastact,
+            last_usr_checkout.lastcirc,
+            au.create_date,
+            addr.street1,
+            addr.street2,
+            addr.city,
+            addr.state,
+            addr.post_code
               INTO
               patronid, exiration_date, patron_branch, patron_status,
               patron_circ_ytd, patron_prev_year_circ_count, patron_circ_count, patron_last_active,
@@ -893,12 +970,207 @@ splitter
               FROM
               actor.usr au
               JOIN actor.org_unit aou ON (aou.id=au.home_ou)
-              LEFT JOIN (SELECT COUNT(*) "ytdcirccount" FROM action.circulation acirc2 WHERE usr=pid AND date_part('year', xact_start) = date_part('year', now()) ) ytd ON (1=1)
+              LEFT JOIN (SELECT COUNT(*) "ytdcirccount" FROM action.circulation acirc2 WHERE acirc2.usr=pid AND date_part('year', xact_start) = date_part('year', now()) ) ytd ON (1=1)
               LEFT JOIN (SELECT COUNT(*) "prvyearcirccount" FROM action.circulation acirc2 WHERE acirc2.usr=pid AND (date_part('year', xact_start)::INT - 1) = (date_part('year', now())::INT - 1) ) prevytd ON (1=1)
               LEFT JOIN (SELECT COUNT(*) "tcirccount" FROM action.circulation acirc2 WHERE acirc2.usr=pid ) circcount ON (1=1)
-              LEFT JOIN (SELECT MAX(event_time) "lastact" FROM actor.usr_activity aua WHERE aua.usr=pid ) circcount ON (1=1)
+              LEFT JOIN (SELECT MAX(event_time) "lastact" FROM actor.usr_activity aua WHERE aua.usr=pid ) usr_activity ON (1=1)
+              LEFT JOIN (SELECT MAX(xact_start) "lastcirc" FROM action.circulation acirc2 WHERE acirc2.usr=pid ) last_usr_checkout ON (1=1)
+              LEFT JOIN (SELECT MAX(id) "id" FROM actor.usr_address auaddress WHERE auaddress.usr=pid AND auaddress.address_type='MAILING' ) auaa ON (1=1)
+              LEFT JOIN (SELECT auadd.id,auadd.street1,auadd.street2,auadd.city,auadd.state,auadd.post_code FROM actor.usr_address auadd WHERE auadd.usr=pid ) addr ON (addr.id=auaa.id)
               WHERE
               au.id=pid;
+            RETURN NEXT;
+        END LOOP;
+
+      END;
+
+    $BODY$
+      LANGUAGE plpgsql VOLATILE;
+
+splitter
+        dbhandler_update($query);
+
+        $query = <<'splitter';
+
+    CREATE OR REPLACE FUNCTION libraryiq.attempt_hold_detail(bigint)
+      RETURNS table ( bibid BIGINT, current_request_count BIGINT) AS
+    $BODY$
+
+      DECLARE
+        hold_id ALIAS FOR $1;
+        temp_add BIGINT := 0;
+        temp_mmr BIGINT := -1;
+        temp_pickup_lib INT := -1;
+        temp_pickup_libs int[];
+
+      BEGIN
+
+        current_request_count := 0;
+        SELECT
+        (
+            CASE
+            WHEN ahr.hold_type='T' THEN ahr.target
+            WHEN ahr.hold_type='C' THEN ac_hold.record
+            WHEN ahr.hold_type='V' THEN acn_hold.record
+            WHEN ahr.hold_type='P' THEN acp_hold.record
+            WHEN ahr.hold_type='M' THEN mmr.master_record
+            ELSE -1
+            END
+        ), ahr.pickup_lib
+        INTO
+        bibid, temp_pickup_lib
+        FROM
+        action.hold_request ahr
+        LEFT JOIN biblio.record_entry bre ON(ahr.target=bre.id AND ahr.hold_type='T')
+        LEFT JOIN (SELECT acn2.record,ac2.id FROM asset.call_number acn2 JOIN asset.copy ac2 ON ac2.call_number=acn2.id) ac_hold ON(ahr.target=ac_hold.id AND ahr.hold_type='C')
+        LEFT JOIN (SELECT acn2.record,acn2.id FROM asset.call_number acn2 JOIN asset.copy ac2 ON ac2.call_number=acn2.id) acn_hold ON(ahr.target=acn_hold.id AND ahr.hold_type='V')
+        LEFT JOIN (SELECT acn2.record,acp2.part as id FROM asset.call_number acn2 JOIN asset.copy ac2 ON ac2.call_number=acn2.id JOIN asset.copy_part_map acp2 ON acp2.target_copy=ac2.id) acp_hold ON(ahr.target=acp_hold.id AND ahr.hold_type='P')
+        LEFT JOIN metabib.metarecord mmr ON(mmr.id=ahr.target AND ahr.hold_type='M')
+        WHERE
+        ahr.id=hold_id;
+
+        SELECT
+        metarecord
+        INTO
+        temp_mmr
+        FROM
+        metabib.metarecord_source_map
+        WHERE source = bibid
+        LIMIT 1;
+
+        SELECT
+        array_agg(id)
+        INTO
+        temp_pickup_libs
+        FROM
+        actor.org_unit_descendants(temp_pickup_lib,1);
+
+        -- metarecord holds
+        IF temp_mmr != -1 THEN
+            temp_add := 0;
+            SELECT COUNT(DISTINCT ahr.id)
+            INTO
+            temp_add
+            FROM
+            action.hold_request ahr
+            JOIN (SELECT source FROM metabib.metarecord_source_map WHERE metarecord = temp_mmr) all_source ON (1=1)
+            JOIN metabib.metarecord_source_map all_mmr ON (all_source.source=all_mmr.source AND ahr.hold_type='M' AND all_mmr.metarecord=ahr.target)
+            WHERE
+            ahr.cancel_time IS NULL AND
+            (ahr.expire_time IS NULL OR ahr.expire_time > NOW()) AND
+            ahr.fulfillment_time IS NULL AND
+            ahr.pickup_lib = ANY (temp_pickup_libs);
+
+            current_request_count = current_request_count + temp_add;
+        END IF;
+
+        -- part holds
+        temp_add := 0;
+        SELECT COUNT(DISTINCT ahr.id)
+        INTO
+        temp_add
+        FROM
+        action.hold_request ahr
+        JOIN asset.copy_part_map acpm ON (acpm.part=ahr.target AND ahr.hold_type='P')
+        JOIN asset.copy ac ON (ac.id=acpm.target_copy)
+        JOIN asset.call_number acn ON(acn.id=ac.call_number AND acn.record=bibid)
+        WHERE
+        ahr.cancel_time is null AND
+        (ahr.expire_time IS NULL OR ahr.expire_time > NOW()) AND
+        ahr.fulfillment_time IS NULL AND
+        ahr.pickup_lib = ANY (temp_pickup_libs);
+
+        current_request_count = current_request_count + temp_add;
+
+        -- volume holds
+        temp_add := 0;
+        SELECT COUNT(DISTINCT ahr.id)
+        INTO
+        temp_add
+        FROM
+        action.hold_request ahr
+        JOIN asset.call_number acn ON(acn.id=ahr.target AND ahr.hold_type='V' AND acn.record=bibid)
+        WHERE
+        ahr.cancel_time is null AND
+        (ahr.expire_time IS NULL OR ahr.expire_time > NOW()) AND
+        ahr.fulfillment_time IS NULL AND
+        ahr.pickup_lib = ANY (temp_pickup_libs);
+
+        current_request_count = current_request_count + temp_add;
+
+        -- title holds
+        temp_add := 0;
+        SELECT COUNT(DISTINCT ahr.id)
+        INTO
+        temp_add
+        FROM
+        action.hold_request ahr
+        JOIN biblio.record_entry bre ON(bre.id=ahr.target AND ahr.hold_type='T' AND bre.id=bibid)
+        WHERE
+        ahr.cancel_time is null AND
+        (ahr.expire_time IS NULL OR ahr.expire_time > NOW()) AND
+        ahr.fulfillment_time IS NULL AND
+        ahr.pickup_lib = ANY (temp_pickup_libs);
+
+        current_request_count = current_request_count + temp_add;
+
+        -- copy holds
+        temp_add := 0;
+        SELECT COUNT(DISTINCT ahr.id)
+        INTO
+        temp_add
+        FROM
+        action.hold_request ahr
+        JOIN asset.copy ac ON(ac.id=ahr.target AND ahr.hold_type='C')
+        JOIN asset.call_number acn ON(acn.id=ac.call_number AND acn.record=bibid)
+        WHERE
+        ahr.cancel_time is null AND
+        (ahr.expire_time IS NULL OR ahr.expire_time > NOW()) AND
+        ahr.fulfillment_time IS NULL AND
+        ahr.pickup_lib = ANY (temp_pickup_libs);
+
+        current_request_count = current_request_count + temp_add;
+
+        RETURN NEXT;
+      END;
+
+    $BODY$
+      LANGUAGE plpgsql VOLATILE;
+
+splitter
+        dbhandler_update($query);
+        $query = <<'splitter';
+
+    CREATE OR REPLACE FUNCTION libraryiq.get_holds(bigint[])
+      RETURNS table ( bibid BIGINT, branch TEXT, current_request_count BIGINT, report_time TEXT) AS
+    $BODY$
+
+      DECLARE
+        hold_id_array ALIAS FOR $1;
+        hid BIGINT;
+
+      BEGIN
+
+        FOREACH hid IN ARRAY hold_id_array
+        LOOP
+            SELECT
+            lahd.bibid,
+            lahd.current_request_count
+            INTO
+            bibid, current_request_count
+            FROM
+            libraryiq.attempt_hold_detail(hid) as lahd;
+            
+            SELECT 
+            aou.shortname,
+            now()::TEXT
+              INTO
+              branch, report_time
+              FROM
+              action.hold_request ahr
+              JOIN actor.org_unit aou ON (aou.id=ahr.pickup_lib)
+              WHERE
+              ahr.id=hid;
             RETURN NEXT;
         END LOOP;
 
@@ -991,7 +1263,48 @@ sub dedupeArray
     {
         push (@ret, $key);
     }
+    @ret = sort @ret;
     return \@ret;
+}
+
+sub checkHistory
+{
+    my $libs = shift;
+    my $key = makeLibKey($libs);
+    my $query = "SELECT id,last_run FROM libraryiq.history WHERE key = \$1";
+    my @vals = ($key);
+    my @results = @{dbhandler_query($query, \@vals)};
+    pop @results;
+    if($#results == -1)
+    {
+        log_write("Creating new history entry: $key", 1);
+        my $q = "INSERT INTO libraryiq.history(key) VALUES(\$1)";
+        dbhandler_update($q, \@vals);
+    }
+    @results = @{dbhandler_query($query, \@vals)};
+    pop @results;
+    foreach(@results)
+    {
+        my @row = @{$_};
+        $historyID = @row[0];
+        $lastUpdatePGDate = "'" . @row[1] . "'::TIMESTAMPTZ";
+    }
+}
+
+sub updateHistory
+{
+    return if !$historyID;
+    my $query = "UPDATE libraryiq.history SET last_run = now() WHERE id = \$1";
+    my @vals = ($historyID);
+    dbhandler_update($query, \@vals);
+}
+
+sub makeLibKey
+{
+    my $libs = shift;
+    $libs =~ s/\s//g;
+    $libs = $conf{"filenameprefix"} . "_" . $libs;
+    return $libs;
 }
 
 sub startFile
@@ -1156,6 +1469,33 @@ sub chooseNewFileName
     }
 
     return $ret;
+}
+
+sub makeTarGZ
+{
+    print "taring...\n";
+    my $dataref = shift;
+    my %res = $dataref ? %{$dataref} : ();
+    my @files = ();
+    while ((my $key, my $val) = each(%res))
+    {
+        my @thisRes = @{$val};
+        my $filename = @thisRes[0];
+        print $filename ."\n";
+        $filename =~ s/$baseTemp//g;
+        print $filename ."\n";
+        push (@files, $filename);
+    }
+    my $dt = DateTime->now(time_zone => "local");
+    my $fdate = $dt->ymd;
+    my $filenameprefix = trim($conf{"filenameprefix"});
+    my $tarFileName = chooseNewFileName($conf{"archive"}, "$filenameprefix" . "_$fdate", "tar.gz");
+    my $systemCMD = "cd '$baseTemp' && tar -zcvf '$tarFileName' ";
+    $systemCMD .= "'$_' " foreach(@files);
+    log_write("Running\n$systemCMD", 1);
+    my $worked = system($systemCMD);
+    return $tarFileName if $worked eq '0';
+    return 0;
 }
 
 sub sendftp    #server,login,password,remote directory, array of local files to transfer, Loghandler object
