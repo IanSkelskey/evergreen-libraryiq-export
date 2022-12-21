@@ -18,19 +18,19 @@ use strict;
 
 use Getopt::Long;
 use DBD::Pg;
-use Net::FTP;
+use Net::SFTP;
 use Data::Dumper;
 use XML::Simple;
 use DateTime;
 use utf8;
 use Encode;
-
-# use DateTime::Format::Duration;
+use Email::MIME;
 
 our $configFile;
 our $debug                 = 0;
 our $xmlconf = "/openils/conf/opensrf.xml";
 our $reCreateDBSchema;
+our $full;
 our $dbHandler;
 our $baseTemp;
 
@@ -40,13 +40,14 @@ our %conf;
 our @includedOrgUnitIDs;
 our $historyID;
 our $lastUpdatePGDate;
-
+our $jobtype = "diff";
 
 GetOptions(
     "xmlconfig=s"     => \$xmlconf,
     "config=s"       => \$configFile,
     "debug"           => \$debug,
     "recreatedb" => \$reCreateDBSchema,
+    "full" => \$full,
 ) or printHelp();
 
 
@@ -71,35 +72,53 @@ sub start {
     my $pgLibs = makeLibList(\@includedOrgUnitIDs);
 
     checkHistory($pgLibs);
-    # my @loops = ( qw/bibs items circs patrons holds/ );
-    my @loops = ( qw/patrons items/ );
+    my @loops = ( qw/bibs items circs patrons holds/ );
+    # my @loops = ( qw/patrons items/ );
     my %res = ();
     $res{$_} = makeDataFile($_, $pgLibs) foreach @loops;
     log_write(Dumper(\%res));
     updateHistory();
-    my $tarFile = makeTarGZ(\%res);
-    if($tarFile)
+    my $tarFile;
+    my $tarFileBareFileName;
+    $tarFile = makeTarGZ(\%res) if($conf{"compressoutput"});
+
+    my $filecount = 0;
+    my $filedetails = '';
+    my @files;
+    $tarFileBareFileName = getBareFileName($tarFile);
+
+    @files = ($tarFile) if($tarFile);
+    while ((my $key, my $val) = each(%res))
     {
-
-    my $subject = trim($conf{"emailsubjectline"});
+        my @thisRes = @{$val};
+        my $filename = @thisRes[0];
+        my $rcount = @thisRes[1];
+        $filecount++;
+        push (@files, $filename) if(!$tarFile);
+        unlink $filename or warn "Could not remove $_\n" if($tarFile);
+        $filename = getBareFileName($filename);
+        $filedetails .= "$key [$filename]\t\t$rcount record(s)\n";
     }
-    # my @files = ($tarFile);
+    $filedetails .= "\nThese were compressed into '$tarFileBareFileName'" if $tarFile;
 
-    # sendftp($conf{"ftphost"},$conf{"ftplogin"},$conf{"ftppass"},$conf{"remote_directory"}, \@files, $log);
+    my $body = email_body();
+    $body =~ s/!!jobtype!!/$jobtype/g;
+    $body =~ s/!!filedetails!!/$filedetails/g;
+    $body =~ s/!!filecount!!/$filecount/g;
+    $body =~ s/!!startdate!!/$lastUpdatePGDate/g;
+    $body =~ s/!!trasnferhost!!/$conf{"ftphost"}/g;
+    $body =~ s/!!remotedir!!/$conf{"remote_directory"}/g;
+    $body =~ s/::TIMESTAMPTZ//g;
 
-    # my @tolist = ($conf{"alwaysemail"});
-    # my $email = new email($conf{"fromemail"},\@tolist,$valid,1,\%conf);
-    # my $afterProcess = DateTime->now(time_zone => "local");
-    # my $difference = $afterProcess - $dt;
-    # my $format = DateTime::Format::Duration->new(pattern => '%M:%S');
-    # my $duration =  $format->format_duration($difference);
-    # my @s = split(/\//,$file);
-    # my $displayFilename = @s[$#s];
-    # $email->send("$subject","Duration: $duration\r\nTotal Extracted: $count\r\nFilename: $displayFilename\r\nFTP Directory: ".$conf{"remote_directory"}."\r\nThis is a full replacement\r\n-Evergreen Perl Squad-");
-    # foreach(@files)
-    # {
-        # unlink $_ or warn "Could not remove $_\n";
-    # }
+    my $ftpFail = send_sftp($conf{"ftphost"}, $conf{"ftplogin"}, $conf{"ftppass"}, $conf{"remote_directory"}, \@files);
+    my $subject = trim($conf{"emailsubjectline"});
+    $subject .= ' - FTP FAIL' if $ftpFail;
+    $body = "$ftpFail" if $ftpFail;
+    my @tolist = ($conf{"alwaysemail"});
+    my $email;
+    $email = email_setup($conf{"fromemail"}, \@tolist, 1, 0, $conf{"erroremaillist"}, $conf{"successemaillist"}) if $ftpFail;
+    $email = email_setup($conf{"fromemail"}, \@tolist, 0, 1, $conf{"erroremaillist"}, $conf{"successemaillist"}) if !$ftpFail;;
+    email_send($email, $subject, $body);
 
     log_write(" ---------------- Script Ending ---------------- ", 1);
     close($log);
@@ -121,7 +140,7 @@ sub makeDataFile
     );
     
 
-    my $filenameprefix = trim($conf{"filenameprefix"}) . '_' .$type;
+    my $filenameprefix = trim($conf{"filenameprefix"}) . '_' . $jobtype . '_' . $type;
     my $limit = $conf{'chunksize'} || 10000;
     my $offset = 0;
     my $file = chooseNewFileName($baseTemp, $filenameprefix . "_".$fdate, "tsv");
@@ -151,7 +170,8 @@ sub makeDataFile
         $count += $#data;
         writeData(\@data, $fileHandle);
         $offset += $limit;
-        eval $perlIDEval;
+        # eval $perlIDEval;
+        @ids = ();
         undef $perlChunkCode;
         undef $h;
     }
@@ -434,7 +454,7 @@ sub checkCMDArgs {
     my $conf = readConfFile($configFile);
     %conf = %{$conf};
 
-    my @reqs = ("logfile","tempdir","libraryname","ftplogin","ftppass","ftphost","remote_directory","emailsubjectline","archive");
+    my @reqs = ("logfile","tempdir","libraryname","ftplogin","ftppass","ftphost","remote_directory","emailsubjectline","archive","transfermethod");
     my @missing = ();
     for my $i (0..$#reqs)
     {
@@ -447,15 +467,21 @@ sub checkCMDArgs {
         print "$_\n" foreach(@missing);
         exit 1;
     }
-    if( !-e $conf{"tempdir"})
+    if( !-e $conf{"tempdir"} )
     {
         print "Temp folder: " . $conf{"tempdir"} . " does not exist.\n";
         exit 1;
     }
 
-    if( !-e $conf{"archive"})
+    if( !-e $conf{"archive"} )
     {
         print "Archive folder: " . $conf{"archive"} . " does not exist.\n";
+        exit 1;
+    }
+
+    if( lc $conf{"transfermethod"} ne 'sftp' )
+    {
+        print "Transfer method: " . $conf{"transfermethod"} . " is not supported\n";
         exit 1;
     }
 
@@ -1280,6 +1306,7 @@ sub checkHistory
         log_write("Creating new history entry: $key", 1);
         my $q = "INSERT INTO libraryiq.history(key) VALUES(\$1)";
         dbhandler_update($q, \@vals);
+        $jobtype = "full";
     }
     @results = @{dbhandler_query($query, \@vals)};
     pop @results;
@@ -1289,6 +1316,8 @@ sub checkHistory
         $historyID = @row[0];
         $lastUpdatePGDate = "'" . @row[1] . "'::TIMESTAMPTZ";
     }
+    $lastUpdatePGDate = "'1000-01-01'::TIMESTAMPTZ" if($full);
+    $jobtype = "full" if($full);
 }
 
 sub updateHistory
@@ -1498,7 +1527,7 @@ sub makeTarGZ
     return 0;
 }
 
-sub sendftp    #server,login,password,remote directory, array of local files to transfer, Loghandler object
+sub send_sftp
 {
     my $hostname = shift;
     my $login = shift;
@@ -1507,22 +1536,234 @@ sub sendftp    #server,login,password,remote directory, array of local files to 
     my $fileRef = shift;
     my @files = @{$fileRef} if $fileRef;
 
-    log_write("**********FTP starting -> $hostname with $login and $pass -> $remotedir", 1);
-    my $ftp = Net::FTP->new($hostname, Debug => 0, Passive=> 1)
-    or die $log->addLogLine("Cannot connect to ".$hostname);
-    $ftp->login($login,$pass)
-    or die $log->addLogLine("Cannot login ".$ftp->message);
-    $ftp->cwd($remotedir)
-    or die $log->addLogLine("Cannot change working directory ", $ftp->message);
+    log_write("**********SFTP starting -> $hostname with $login and $pass -> $remotedir", 1);
+    my $sftp = Net::SFTP->new($hostname, debug => 0, user => $login, password => $pass )
+    or return "Cannot connect to ".$hostname;
     foreach my $file (@files)
     {
-        $log->addLogLine("Sending file $file");
-        $ftp->put($file)
-        or die $log->addLogLine("Sending file $file failed");
+        my @s = split(/\//,$file);
+        my $dest = pop @s;
+        $dest = $remotedir ."/$dest";
+        log_write("Sending file $file -> $dest", 1 );
+        $sftp->put($file, $dest)
+        or return "Sending file $file failed";
     }
-    $ftp->quit
-    or die $log->addLogLine("Unable to close FTP connection");
-    $log->addLogLine("**********FTP session closed ***************");
+    log_write("**********SFTP session closed ***************", 1);
+    return 0;
+}
+
+sub email_setup
+{
+    my ( $from, $emailRecipientArrayRef, $errorFlag, $successFlag ) = @_;
+
+    my $email = {
+        fromEmailAddress    => $from,
+        emailRecipientArray => $emailRecipientArrayRef,
+        notifyError         => $errorFlag,                #true/false
+        notifySuccess       => $successFlag,              #true/false
+    };
+
+    return email_setupFinalToList($email);
+}
+
+sub email_send
+{
+    my ( $email, $subject, $body ) = @_;
+    
+    my $message = Email::MIME->create(
+        header_str => [
+            From    => $email->{fromEmailAddress},
+            To      => [ @{ $email->{finalToEmailList} } ],
+            Subject => $subject
+        ],
+        attributes => {
+            encoding => 'quoted-printable',
+            charset  => 'ISO-8859-1',
+        },
+        body_str => "$body\n"
+    );
+
+    use Email::Sender::Simple qw(sendmail);
+
+    email_reportSummary( $email, $subject, $body );
+
+    sendmail($message);
+
+    print "Sent\n" if $debug;
+}
+
+sub email_reportSummary
+{
+    my ( $email, $subject, $body, $attachmentRef ) = @_;
+    my @attachments   = ();
+    @attachments = @{$attachmentRef} if ( ref($attachmentRef) eq 'ARRAY' );
+
+    my $characters = length($body);
+    my @lines      = split( /\n/, $body );
+    my $bodySize   = $characters / 1024 / 1024;
+
+    print "\n";
+    print "From: " . $email->{fromEmailAddress} . "\n";
+    print "To: ";
+    print "$_, " foreach ( @{ $email->{finalToEmailList} } );
+    print "\n";
+    print "Subject: $subject\n";
+    print "== BODY ==\n";
+    print "$characters characters\n";
+    print scalar(@lines) . " lines\n";
+    print $bodySize . "MB\n";
+    print "== BODY ==\n";
+
+    my $fileSizeTotal = 0;
+    if ( $#attachments > -1 )
+    {
+        print "== ATTACHMENT SUMMARY == \n";
+
+        foreach (@attachments)
+        {
+            $fileSizeTotal += -s $_;
+            my $thisFileSize = ( -s $_ ) / 1024 / 1024;
+            print "$_: ";
+            printf( "%.3f", $thisFileSize );
+            print "MB\n";
+
+        }
+        $fileSizeTotal = $fileSizeTotal / 1024 / 1024;
+
+        print "Total Attachment size: ";
+        printf( "%.3f", $fileSizeTotal );
+        print "MB\n";
+        print "== ATTACHMENT SUMMARY == \n";
+    }
+
+    $fileSizeTotal += $bodySize;
+    print "!!!WARNING!!! Email (w/attachments) Exceeds Standard 25MB\n" if ( $fileSizeTotal > 25 );
+    print "\n";
+
+}
+
+sub email_deDupeEmailArray
+{
+    my $email         = shift;
+    my $emailArrayRef = shift;
+    my @emailArray    = @{$emailArrayRef};
+    my %posTracker    = ();
+    my %bareEmails    = ();
+    my $pos           = 0;
+    my @ret           = ();
+
+    foreach (@emailArray)
+    {
+        my $thisEmail = $_;
+
+        print "processing: '$thisEmail'\n" if $debug;
+
+        # if the email address is expressed with a display name,
+        # strip it to just the email address
+        $thisEmail =~ s/^[^<]*<([^>]*)>$/$1/g if ( $thisEmail =~ m/</ );
+
+        # lowercase it
+        $thisEmail = lc $thisEmail;
+
+        # Trim the spaces
+        $thisEmail = trim($thisEmail);
+
+        print "normalized: '$thisEmail'\n" if $debug;
+
+        $bareEmails{$thisEmail} = 1;
+        if ( !$posTracker{$thisEmail} )
+        {
+            my @a = ();
+            $posTracker{$thisEmail} = \@a;
+            print "adding: '$thisEmail'\n" if $debug;
+        }
+        else
+        {
+            print "deduped: '$thisEmail'\n" if $debug;
+        }
+        push( @{ $posTracker{$thisEmail} }, $pos );
+        $pos++;
+    }
+    while ( ( my $email, my $value ) = each(%bareEmails) )
+    {
+        my @a = @{ $posTracker{$email} };
+
+        # just take the first occurance of the duplicate email
+        push( @ret, @emailArray[ @a[0] ] );
+    }
+
+    return \@ret;
+}
+
+sub email_body
+{
+    my $ret = <<'splitter';
+Dear staff,
+
+This is a LibraryIQ Evergreen export.
+
+This was a !!jobtype!! extraction. We gathered data starting from this date: !!startdate!!
+
+Results:
+
+!!filecount!! file(s)
+
+!!filedetails!!
+
+We transferred the data to:
+
+!!trasnferhost!!!!remotedir!!
+
+Yours Truely,
+The Evergreen Server
+
+splitter
+
+}
+
+sub email_setupFinalToList
+{
+    my $email = shift;
+    my @ret  = ();
+
+    my @varMap = ( "successemaillist", "erroremaillist" );
+
+    foreach (@varMap)
+    {
+        my @emailList = split( /,/, $conf{$_} );
+        for my $y ( 0 .. $#emailList )
+        {
+            @emailList[$y] = trim( @emailList[$y] );
+        }
+        $email->{$_} = \@emailList;
+        print "$_:\n" . Dumper( \@emailList ) if $debug;
+    }
+
+    undef @varMap;
+
+    push( @ret, @{ $email->{emailRecipientArray} } ) if ( $email->{emailRecipientArray}->[0] );
+
+    push( @ret, @{ $email->{successemaillist} } ) if ( $email->{'notifySuccess'} );
+
+    push( @ret, @{ $email->{erroremaillist} } ) if ( $email->{'notifyError'} );
+
+    print "pre dedupe:\n" . Dumper( \@ret ) if $debug;
+
+    # Dedupe
+    @ret = @{ email_deDupeEmailArray( $email, \@ret ) };
+
+    print "post dedupe:\n" . Dumper( \@ret ) if $debug;
+
+    $email->{finalToEmailList} = \@ret;
+
+    return $email;
+}
+
+sub getBareFileName
+{
+    my $fullFile = shift;
+    my @s = split(/\//, $fullFile);
+    return pop @s;
 }
 
 sub getDBconnects
