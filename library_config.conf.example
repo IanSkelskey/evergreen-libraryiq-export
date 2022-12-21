@@ -1,6 +1,7 @@
 logfile = /openils/var/log/libraryiq_export.log
 
 tempdir = /tmp
+archive = /path/to/archive
 
 # This needs to match actor.org_unit.shortname
 # This is how the query gets only data for that system/branch
@@ -18,9 +19,17 @@ include_org_descendants = 1
 chunksize = 500
 
 filenameprefix = library
+
+# If enabled, the output file(s) will be tar.gz
+# uncomment to enable
+compressoutput = 1
+
 #
-#FTP Server to drop off
+#SFTP Server to drop off
 #
+# Transfer method. SFTP is the only supported method
+
+transfermethod = sftp
 
 ftphost = sample.com
 ftplogin = sample
@@ -33,5 +42,5 @@ emailsubjectline = Email subject
 alwaysemail = sample@sample.org
 
 fromemail = no-reply-sample@sample.org
-erroremaillist = sample@sample.org
-successemaillist = sample@sample.org
+erroremaillist = sample@sample.org, another2@sample.org
+successemaillist = sample@sample.org, another@sample.org
