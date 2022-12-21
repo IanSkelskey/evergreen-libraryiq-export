@@ -27,7 +27,7 @@ use Encode;
 use Email::MIME;
 
 our $configFile;
-our $debug                 = 0;
+our $debug   = 0;
 our $xmlconf = "/openils/conf/opensrf.xml";
 our $reCreateDBSchema;
 our $full;
@@ -43,13 +43,12 @@ our $lastUpdatePGDate;
 our $jobtype = "diff";
 
 GetOptions(
-    "xmlconfig=s"     => \$xmlconf,
-    "config=s"       => \$configFile,
-    "debug"           => \$debug,
-    "recreatedb" => \$reCreateDBSchema,
-    "full" => \$full,
+    "xmlconfig=s" => \$xmlconf,
+    "config=s"    => \$configFile,
+    "debug"       => \$debug,
+    "recreatedb"  => \$reCreateDBSchema,
+    "full"        => \$full,
 ) or printHelp();
-
 
 checkCMDArgs();
 
@@ -59,44 +58,44 @@ start();
 
 sub start {
 
-    log_write(" ---------------- Script Starting ---------------- ", 1);
-    print "Executing job tail the log for information (".$conf{"logfile"}.")\n";
+    log_write( " ---------------- Script Starting ---------------- ", 1 );
+    print "Executing job tail the log for information (" . $conf{"logfile"} . ")\n";
 
     $baseTemp = $conf{"tempdir"};
     $baseTemp =~ s/\/$//;
     $baseTemp .= '/';
-    my $libraryname = trim($conf{"libraryname"});
-    @includedOrgUnitIDs = @{getOrgUnits($libraryname)};
-    my $pgLibs = makeLibList(\@includedOrgUnitIDs);
+    my $libraryname = trim( $conf{"libraryname"} );
+    @includedOrgUnitIDs = @{ getOrgUnits($libraryname) };
+    my $pgLibs = makeLibList( \@includedOrgUnitIDs );
 
     checkHistory($pgLibs);
-    my @loops = ( qw/bibs items circs patrons holds/ );
-    my %res = ();
-    $res{$_} = makeDataFile($_, $pgLibs) foreach @loops;
-    log_write(Dumper(\%res));
+    my @loops = (qw/bibs items circs patrons holds/);
+    my %res   = ();
+    $res{$_} = makeDataFile( $_, $pgLibs ) foreach @loops;
+    log_write( Dumper( \%res ) );
     updateHistory();
     my $tarFile;
     my $tarFileBareFileName;
-    $tarFile = makeTarGZ(\%res) if($conf{"compressoutput"});
+    $tarFile = makeTarGZ( \%res ) if ( $conf{"compressoutput"} );
 
-    my $filecount = 0;
+    my $filecount   = 0;
     my $filedetails = '';
     my @files;
     $tarFileBareFileName = getBareFileName($tarFile);
 
-    @files = ($tarFile) if($tarFile);
-    while ((my $key, my $val) = each(%res))
-    {
-        my @thisRes = @{$val};
+    @files = ($tarFile) if ($tarFile);
+    while ( ( my $key, my $val ) = each(%res) ) {
+        my @thisRes  = @{$val};
         my $filename = @thisRes[0];
-        my $rcount = @thisRes[1];
+        my $rcount   = @thisRes[1];
         $filecount++;
-        push (@files, $filename) if(!$tarFile);
-        unlink $filename or warn "Could not remove $filename\n" if($tarFile);
+        push( @files, $filename ) if ( !$tarFile );
+        unlink $filename or warn "Could not remove $filename\n" if ($tarFile);
         $filename = getBareFileName($filename);
         $filedetails .= "$key [$filename]\t\t$rcount record(s)\n";
     }
-    $filedetails .= "\nThese were compressed into '$tarFileBareFileName'" if $tarFile;
+    $filedetails .= "\nThese were compressed into '$tarFileBareFileName'"
+      if $tarFile;
 
     my $body = email_body();
     $body =~ s/!!jobtype!!/$jobtype/g;
@@ -107,119 +106,112 @@ sub start {
     $body =~ s/!!remotedir!!/$conf{"remote_directory"}/g;
     $body =~ s/::TIMESTAMPTZ//g;
 
-    my $ftpFail = send_sftp($conf{"ftphost"}, $conf{"ftplogin"}, $conf{"ftppass"}, $conf{"remote_directory"}, \@files);
+    my $ftpFail =
+      send_sftp( $conf{"ftphost"}, $conf{"ftplogin"}, $conf{"ftppass"}, $conf{"remote_directory"}, \@files );
 
-    if (!$tarFile)
-    {
-        foreach(@files)
-        {
-            my $destFile =  getBareFileName($_);
-            my $cmd = "mv '$_' '" .$conf{"archive"} . "/$destFile'";
-            log_write("Running: $cmd", 1);
+    if ( !$tarFile ) {
+        foreach (@files) {
+            my $destFile = getBareFileName($_);
+            my $cmd      = "mv '$_' '" . $conf{"archive"} . "/$destFile'";
+            log_write( "Running: $cmd", 1 );
             system($cmd);
         }
     }
-    my $subject = trim($conf{"emailsubjectline"});
+    my $subject = trim( $conf{"emailsubjectline"} );
     $subject .= ' - FTP FAIL' if $ftpFail;
     $body = "$ftpFail" if $ftpFail;
-    my @tolist = ($conf{"alwaysemail"});
+    my @tolist = ( $conf{"alwaysemail"} );
     my $email;
-    $email = email_setup($conf{"fromemail"}, \@tolist, $ftpFail, !$ftpFail, $conf{"erroremaillist"}, $conf{"successemaillist"});
-    email_send($email, $subject, $body);
+    $email = email_setup( $conf{"fromemail"}, \@tolist, $ftpFail, !$ftpFail,
+        $conf{"erroremaillist"}, $conf{"successemaillist"} );
+    email_send( $email, $subject, $body );
 
-    log_write(" ---------------- Script Ending ---------------- ", 1);
+    log_write( " ---------------- Script Ending ---------------- ", 1 );
     close($log);
 }
 
-sub makeDataFile
-{
-    my $type = shift;
-    my $pgLibs = shift;
-    my $dt = DateTime->now(time_zone => "local");
-    my $fdate = $dt->ymd;
-    my %funcMap =
-    (
-        'bibs' => {"chunk" => "getSQLFunctionChunk", "ids" => "getBibIDs"},
-        'items' => {"chunk" => "getSQLFunctionChunk", "ids" => "getItemIDs"},
-        'circs' => {"chunk" => "getSQLFunctionChunk", "ids" => "getCircIDs"},
-        'patrons' => {"chunk" => "getSQLFunctionChunk", "ids" => "getPatronIDs"},
-        'holds' => {"chunk" => "getSQLFunctionChunk", "ids" => "getHoldIDs"},
+sub makeDataFile {
+    my $type    = shift;
+    my $pgLibs  = shift;
+    my $dt      = DateTime->now( time_zone => "local" );
+    my $fdate   = $dt->ymd;
+    my %funcMap = (
+        'bibs'    => { "chunk" => "getSQLFunctionChunk", "ids" => "getBibIDs" },
+        'items'   => { "chunk" => "getSQLFunctionChunk", "ids" => "getItemIDs" },
+        'circs'   => { "chunk" => "getSQLFunctionChunk", "ids" => "getCircIDs" },
+        'patrons' => { "chunk" => "getSQLFunctionChunk", "ids" => "getPatronIDs" },
+        'holds'   => { "chunk" => "getSQLFunctionChunk", "ids" => "getHoldIDs" },
     );
 
-    my $filenameprefix = trim($conf{"filenameprefix"}) . '_' . $jobtype . '_' . $type;
-    my $limit = $conf{'chunksize'} || 500;
-    my $offset = 0;
-    my $file = chooseNewFileName($baseTemp, $filenameprefix . "_".$fdate, "tsv");
+    my $filenameprefix = trim( $conf{"filenameprefix"} ) . '_' . $jobtype . '_' . $type;
+    my $limit          = $conf{'chunksize'} || 500;
+    my $offset         = 0;
+    my $file           = chooseNewFileName( $baseTemp, $filenameprefix . "_" . $fdate, "tsv" );
     print "Creating: $file\n";
     my $fileHandle = startFile($file);
     my @ids;
     my $count = 0;
-    
+
     my $perlIDEval = '@ids = @{' . $funcMap{$type}{"ids"} . '($pgLibs, $limit, $offset)};';
-    my $firstTime = 1;
+    my $firstTime  = 1;
     eval $perlIDEval;
-    while($#ids > -1)
-    {
+    while ( $#ids > -1 ) {
         my @data;
-        my $perlChunkCode = '@data = @{' . $funcMap{$type}{"chunk"}  . '(\@ids, "' . $type.'")};';
+        my $perlChunkCode = '@data = @{' . $funcMap{$type}{"chunk"} . '(\@ids, "' . $type . '")};';
         eval $perlChunkCode;
 
         #last row has header info
         my $h = pop @data;
 
-        if($firstTime)
-        {
+        if ($firstTime) {
             $firstTime = 0;
-            my @head = ([@{$h}]);
-            writeData(\@head, $fileHandle);
+            my @head = ( [ @{$h} ] );
+            writeData( \@head, $fileHandle );
         }
         $count += $#data;
-        writeData(\@data, $fileHandle);
+        writeData( \@data, $fileHandle );
         $offset += $limit;
+
         # eval $perlIDEval;
         @ids = ();
         undef $perlChunkCode;
         undef $h;
     }
     close($fileHandle);
-    my @ret = ($file, $count);
+    my @ret = ( $file, $count );
     return \@ret;
 }
 
-sub writeData
-{
-    my $dataRef = shift;
-    my @data = @{$dataRef};
+sub writeData {
+    my $dataRef    = shift;
+    my @data       = @{$dataRef};
     my $fileHandle = shift;
-    my $output = '';
-    foreach(@data)
-    {
+    my $output     = '';
+    foreach (@data) {
         my @row = @{$_};
-        $output .= join("\t", @row);
+        $output .= join( "\t", @row );
         $output .= "\n";
     }
     print $fileHandle $output;
 }
 
-sub getSQLFunctionChunk
-{
-    my $idRef = shift;
-    my $type = shift;
-    my @ids = @{$idRef};
-    my $pgArray = join(',', @ids);
+sub getSQLFunctionChunk {
+    my $idRef   = shift;
+    my $type    = shift;
+    my @ids     = @{$idRef};
+    my $pgArray = join( ',', @ids );
     $pgArray = "'{$pgArray}'::BIGINT[]";
     my $query = "select * from libraryiq.get_$type($pgArray)";
     log_write($query) if $debug;
     return dbhandler_query($query);
 }
 
-sub getBibIDs
-{
+sub getBibIDs {
     my $pgLibs = shift;
-    my $limit = shift;
+    my $limit  = shift;
     my $offset = shift;
-    my @ret = ();
-    my $query = "
+    my @ret    = ();
+    my $query  = "
     SELECT bre.id
     FROM
     biblio.record_entry bre
@@ -230,23 +222,22 @@ sub getBibIDs
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
-    my @results = @{getDataChunk($query, $limit, $offset)};
+    my @results = @{ getDataChunk( $query, $limit, $offset ) };
     pop @results;
-    foreach(@results)
-    {
+
+    foreach (@results) {
         my @row = @{$_};
-        push (@ret, @row[0])
+        push( @ret, @row[0] );
     }
     return \@ret;
 }
 
-sub getItemIDs
-{
+sub getItemIDs {
     my $pgLibs = shift;
-    my $limit = shift;
+    my $limit  = shift;
     my $offset = shift;
-    my @ret = ();
-    my $query = "
+    my @ret    = ();
+    my $query  = "
     SELECT ac.id
     FROM
     asset.copy ac
@@ -257,23 +248,22 @@ sub getItemIDs
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
-    my @results = @{getDataChunk($query, $limit, $offset)};
+    my @results = @{ getDataChunk( $query, $limit, $offset ) };
     pop @results;
-    foreach(@results)
-    {
+
+    foreach (@results) {
         my @row = @{$_};
-        push (@ret, @row[0])
+        push( @ret, @row[0] );
     }
     return \@ret;
 }
 
-sub getCircIDs
-{
+sub getCircIDs {
     my $pgLibs = shift;
-    my $limit = shift;
+    my $limit  = shift;
     my $offset = shift;
-    my @ret = ();
-    my $query = "
+    my @ret    = ();
+    my $query  = "
     SELECT acirc.id
     FROM
     action.circulation acirc
@@ -286,23 +276,22 @@ sub getCircIDs
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
-    my @results = @{getDataChunk($query, $limit, $offset)};
+    my @results = @{ getDataChunk( $query, $limit, $offset ) };
     pop @results;
-    foreach(@results)
-    {
+
+    foreach (@results) {
         my @row = @{$_};
-        push (@ret, @row[0])
+        push( @ret, @row[0] );
     }
     return \@ret;
 }
 
-sub getPatronIDs
-{
+sub getPatronIDs {
     my $pgLibs = shift;
-    my $limit = shift;
+    my $limit  = shift;
     my $offset = shift;
-    my @ret = ();
-    my $query = "
+    my @ret    = ();
+    my $query  = "
     SELECT au.id
     FROM
     actor.usr au
@@ -313,23 +302,22 @@ sub getPatronIDs
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
-    my @results = @{getDataChunk($query, $limit, $offset)};
+    my @results = @{ getDataChunk( $query, $limit, $offset ) };
     pop @results;
-    foreach(@results)
-    {
+
+    foreach (@results) {
         my @row = @{$_};
-        push (@ret, @row[0])
+        push( @ret, @row[0] );
     }
     return \@ret;
 }
 
-sub getHoldIDs
-{
+sub getHoldIDs {
     my $pgLibs = shift;
-    my $limit = shift;
+    my $limit  = shift;
     my $offset = shift;
-    my @ret = ();
-    my $query = "
+    my @ret    = ();
+    my $query  = "
     SELECT ahr.id
     FROM
     action.hold_request ahr
@@ -342,48 +330,44 @@ sub getHoldIDs
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
-    my @results = @{getDataChunk($query, $limit, $offset)};
+    my @results = @{ getDataChunk( $query, $limit, $offset ) };
     pop @results;
-    foreach(@results)
-    {
+
+    foreach (@results) {
         my @row = @{$_};
-        push (@ret, @row[0])
+        push( @ret, @row[0] );
     }
     return \@ret;
 }
 
-sub makeLibList
-{
+sub makeLibList {
     my $libsRef = shift;
-    my @libs = $libsRef ? @{$libsRef} : ();
-    my $pgLibs = join(',', @libs);
+    my @libs    = $libsRef ? @{$libsRef} : ();
+    my $pgLibs  = join( ',', @libs );
     return -1 if $#libs == -1;
     return $pgLibs;
 }
 
-sub getDataChunk
-{
-    my $query = shift;
-    my $limit = shift;
+sub getDataChunk {
+    my $query  = shift;
+    my $limit  = shift;
     my $offset = shift;
     $query .= "\nLIMIT $limit OFFSET $offset";
     log_write($query) if $debug;
     return dbhandler_query($query);
 }
 
-sub getOrgUnits
-{
-    my $libnames = lc(@_[0]);
-    my @ret = ();
+sub getOrgUnits {
+    my $libnames = lc( @_[0] );
+    my @ret      = ();
 
     # spaces don't belong here
     $libnames =~ s/\s//g;
 
-    my @sp = split(/,/,$libnames);
-    
-    my $libs = join ( '$$,$$', @sp);
-    $libs = '$$' . $libs . '$$';
+    my @sp = split( /,/, $libnames );
 
+    my $libs = join( '$$,$$', @sp );
+    $libs = '$$' . $libs . '$$';
 
     my $query = "
     select id
@@ -392,34 +376,30 @@ sub getOrgUnits
     where lower(shortname) in ($libs)
     order by 1";
     log_write($query) if $debug;
-    my @results = @{dbhandler_query($query)};
+    my @results = @{ dbhandler_query($query) };
     pop @results;
-    foreach(@results)
-    {
+    foreach (@results) {
         my @row = @{$_};
-        push (@ret, @row[0]);
-        if($conf{"include_org_descendants"})
-        {
-            my @des = @{getOrgDescendants(@row[0])};
-            push (@ret, @des);
+        push( @ret, @row[0] );
+        if ( $conf{"include_org_descendants"} ) {
+            my @des = @{ getOrgDescendants( @row[0] ) };
+            push( @ret, @des );
         }
     }
-    return dedupeArray(\@ret);
+    return dedupeArray( \@ret );
 }
 
-sub getOrgDescendants
-{
+sub getOrgDescendants {
     my $thisOrg = shift;
-    my $query = "select id from actor.org_unit_descendants($thisOrg)";
-    my @ret = ();
+    my $query   = "select id from actor.org_unit_descendants($thisOrg)";
+    my @ret     = ();
     log_write($query) if $debug;
-    
-    my @results = @{dbhandler_query($query)};
+
+    my @results = @{ dbhandler_query($query) };
     pop @results;
-    foreach(@results)
-    {
+    foreach (@results) {
         my @row = @{$_};
-        push (@ret, @row[0]);
+        push( @ret, @row[0] );
     }
 
     return \@ret;
@@ -444,15 +424,14 @@ sub checkCMDArgs {
     print "Checking command line arguments...\n" if ($debug);
 
     if ( !-e $xmlconf ) {
-        print "$xmlconf does not exist.\nEvergreen database xml configuration " .
-        "file does not exist. Please provide a path to the Evergreen opensrf.xml " .
-        "database conneciton details. --xmlconf\n";
+        print "$xmlconf does not exist.\nEvergreen database xml configuration "
+          . "file does not exist. Please provide a path to the Evergreen opensrf.xml "
+          . "database conneciton details. --xmlconf\n";
         exit 1;
     }
 
     if ( !-e $configFile ) {
-        print "$configFile does not exist. Please provide a path to your configuration file: ".
-        " --config\n";
+        print "$configFile does not exist. Please provide a path to your configuration file: " . " --config\n";
         exit 1;
     }
 
@@ -460,33 +439,32 @@ sub checkCMDArgs {
     my $conf = readConfFile($configFile);
     %conf = %{$conf};
 
-    my @reqs = ("logfile","tempdir","libraryname","ftplogin","ftppass","ftphost","remote_directory","emailsubjectline","archive","transfermethod");
+    my @reqs = (
+        "logfile", "tempdir", "libraryname",      "ftplogin",
+        "ftppass", "ftphost", "remote_directory", "emailsubjectline",
+        "archive", "transfermethod"
+    );
     my @missing = ();
-    for my $i (0..$#reqs)
-    {
-        push (@missing, @reqs[$i]) if(!$conf{@reqs[$i]})
+    for my $i ( 0 .. $#reqs ) {
+        push( @missing, @reqs[$i] ) if ( !$conf{ @reqs[$i] } );
     }
 
-    if($#missing > -1)
-    {
+    if ( $#missing > -1 ) {
         print "Please specify the required configuration options:\n";
-        print "$_\n" foreach(@missing);
+        print "$_\n" foreach (@missing);
         exit 1;
     }
-    if( !-e $conf{"tempdir"} )
-    {
+    if ( !-e $conf{"tempdir"} ) {
         print "Temp folder: " . $conf{"tempdir"} . " does not exist.\n";
         exit 1;
     }
 
-    if( !-e $conf{"archive"} )
-    {
+    if ( !-e $conf{"archive"} ) {
         print "Archive folder: " . $conf{"archive"} . " does not exist.\n";
         exit 1;
     }
 
-    if( lc $conf{"transfermethod"} ne 'sftp' )
-    {
+    if ( lc $conf{"transfermethod"} ne 'sftp' ) {
         print "Transfer method: " . $conf{"transfermethod"} . " is not supported\n";
         exit 1;
     }
@@ -494,7 +472,7 @@ sub checkCMDArgs {
     # Init logfile
     log_init();
 
-    log_write("Valid Config", 1);
+    log_write( "Valid Config", 1 );
 
     undef @missing;
     undef @reqs;
@@ -503,18 +481,18 @@ sub checkCMDArgs {
 
 sub setupDB {
 
-    my %dbconf = %{getDBconnects($xmlconf)};
-    log_write("got XML db connections", 1);
-    dbhandler_setupConnection($dbconf{"db"}, $dbconf{"dbhost"}, $dbconf{"dbuser"}, $dbconf{"dbpass"}, $dbconf{"port"});
+    my %dbconf = %{ getDBconnects($xmlconf) };
+    log_write( "got XML db connections", 1 );
+    dbhandler_setupConnection( $dbconf{"db"}, $dbconf{"dbhost"}, $dbconf{"dbuser"},
+        $dbconf{"dbpass"}, $dbconf{"port"} );
 
     my $query = "DROP SCHEMA libraryiq CASCADE";
-    dbhandler_update($query) if($reCreateDBSchema);
-    my $query = "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'libraryiq'";
-    my @results = @{dbhandler_query($query)};
-    pop @results; #don't care about headers
-    if($#results==-1)
-    {
-        log_write("Creating Schema: libraryiq", 1);
+    dbhandler_update($query) if ($reCreateDBSchema);
+    my $query   = "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'libraryiq'";
+    my @results = @{ dbhandler_query($query) };
+    pop @results;    #don't care about headers
+    if ( $#results == -1 ) {
+        log_write( "Creating Schema: libraryiq", 1 );
         $query = "CREATE SCHEMA libraryiq";
         dbhandler_update($query);
 
@@ -1217,7 +1195,6 @@ splitter
     undef $query;
 }
 
-
 sub dbhandler_query {
     my $querystring = shift;
     my $valuesRef   = shift;
@@ -1234,7 +1211,7 @@ sub dbhandler_query {
     $query->execute();
 
     while ( my $row = $query->fetchrow_arrayref() ) {
-        push( @ret, [@{$row}] );
+        push( @ret, [ @{$row} ] );
     }
     undef($querystring);
     push( @ret, $query->{NAME} );
@@ -1242,23 +1219,19 @@ sub dbhandler_query {
     return \@ret;
 }
 
-
-sub dbhandler_update
-{
+sub dbhandler_update {
     my $querystring = shift;
-    my $valRef = shift;
-    my @values = ();
+    my $valRef      = shift;
+    my @values      = ();
     @values = @{$valRef} if $valRef;
     my $q = $dbHandler->prepare($querystring);
-    my $i=1;
-    foreach(@values)
-    {
+    my $i = 1;
+    foreach (@values) {
         my $param = $_;
-        if(lc($param eq 'null'))
-        {
+        if ( lc( $param eq 'null' ) ) {
             $param = undef;
         }
-        $q->bind_param($i, $param);
+        $q->bind_param( $i, $param );
         $i++;
     }
     my $ret = $q->execute();
@@ -1284,142 +1257,126 @@ sub dbhandler_setupConnection {
 
 }
 
-sub dedupeArray
-{
-    my $arrRef = shift;
-    my @arr = $arrRef ? @{$arrRef} : ();
+sub dedupeArray {
+    my $arrRef  = shift;
+    my @arr     = $arrRef ? @{$arrRef} : ();
     my %deduper = ();
-    $deduper{$_} = 1 foreach(@arr);
+    $deduper{$_} = 1 foreach (@arr);
     my @ret = ();
-    while ((my $key, my $val) = each(%deduper))
-    {
-        push (@ret, $key);
+    while ( ( my $key, my $val ) = each(%deduper) ) {
+        push( @ret, $key );
     }
     @ret = sort @ret;
     return \@ret;
 }
 
-sub checkHistory
-{
-    my $libs = shift;
-    my $key = makeLibKey($libs);
-    my $query = "SELECT id,last_run FROM libraryiq.history WHERE key = \$1";
-    my @vals = ($key);
-    my @results = @{dbhandler_query($query, \@vals)};
+sub checkHistory {
+    my $libs    = shift;
+    my $key     = makeLibKey($libs);
+    my $query   = "SELECT id,last_run FROM libraryiq.history WHERE key = \$1";
+    my @vals    = ($key);
+    my @results = @{ dbhandler_query( $query, \@vals ) };
     pop @results;
-    if($#results == -1)
-    {
-        log_write("Creating new history entry: $key", 1);
+    if ( $#results == -1 ) {
+        log_write( "Creating new history entry: $key", 1 );
         my $q = "INSERT INTO libraryiq.history(key) VALUES(\$1)";
-        dbhandler_update($q, \@vals);
+        dbhandler_update( $q, \@vals );
         $jobtype = "full";
     }
-    @results = @{dbhandler_query($query, \@vals)};
+    @results = @{ dbhandler_query( $query, \@vals ) };
     pop @results;
-    foreach(@results)
-    {
+    foreach (@results) {
         my @row = @{$_};
-        $historyID = @row[0];
+        $historyID        = @row[0];
         $lastUpdatePGDate = "'" . @row[1] . "'::TIMESTAMPTZ";
     }
-    $lastUpdatePGDate = "'1000-01-01'::TIMESTAMPTZ" if($full);
-    $jobtype = "full" if($full);
+    $lastUpdatePGDate = "'1000-01-01'::TIMESTAMPTZ" if ($full);
+    $jobtype = "full" if ($full);
 }
 
-sub updateHistory
-{
+sub updateHistory {
     return if !$historyID;
     my $query = "UPDATE libraryiq.history SET last_run = now() WHERE id = \$1";
-    my @vals = ($historyID);
-    dbhandler_update($query, \@vals);
+    my @vals  = ($historyID);
+    dbhandler_update( $query, \@vals );
 }
 
-sub makeLibKey
-{
+sub makeLibKey {
     my $libs = shift;
     $libs =~ s/\s//g;
     $libs = $conf{"filenameprefix"} . "_" . $libs;
     return $libs;
 }
 
-sub startFile
-{
+sub startFile {
     my $filename = shift;
     my $handle;
-    open($handle, '> ' . $filename );
-    binmode($log, ":utf8");
+    open( $handle, '> ' . $filename );
+    binmode( $log, ":utf8" );
     return $handle;
 }
 
-sub log_write
-{
-    my $line = shift;
+sub log_write {
+    my $line             = shift;
     my $includeTimestamp = shift;
     $logWrites++;
     log_addLogLine($line) if $includeTimestamp;
-    print $log "$line\n" if !$includeTimestamp;
+    print $log "$line\n"  if !$includeTimestamp;
 
     # flush logs to disk every 100 lines, speed issues if we flush with each write
-    if( $logWrites % 100 == 0 )
-    {
+    if ( $logWrites % 100 == 0 ) {
         close($log);
-        open($log, '>> ' . $conf{"logfile"} );
-        binmode($log, ":utf8");
+        open( $log, '>> ' . $conf{"logfile"} );
+        binmode( $log, ":utf8" );
     }
 }
 
-sub log_addLogLine
-{
+sub log_addLogLine {
     my $line = shift;
 
-    my $dt   = DateTime->now(time_zone => "local");
+    my $dt   = DateTime->now( time_zone => "local" );
     my $date = $dt->ymd;
     my $time = $dt->hms;
 
-    my $datetime = makeEvenWidth("$date $time", 20);
-    print $log $datetime,": $line\n";
+    my $datetime = makeEvenWidth( "$date $time", 20 );
+    print $log $datetime, ": $line\n";
 }
 
-sub makeEvenWidth  #line, width
+sub makeEvenWidth    #line, width
 {
-    my $ret = shift;
+    my $ret   = shift;
     my $width = shift;
 
-    $ret = substr($ret, 0, $width) if(length($ret) > $width);
+    $ret = substr( $ret, 0, $width ) if ( length($ret) > $width );
 
-    $ret .= " " while(length($ret)<$width);
+    $ret .= " " while ( length($ret) < $width );
     return $ret;
 }
 
-sub log_init
-{
-    open($log, '> ' . $conf{"logfile"} ) or die "Cannot write to: " . $conf{"logfile"};
-    binmode($log, ":utf8");
+sub log_init {
+    open( $log, '> ' . $conf{"logfile"} )
+      or die "Cannot write to: " . $conf{"logfile"};
+    binmode( $log, ":utf8" );
 }
 
-sub readConfFile
-{
+sub readConfFile {
     my $file = shift;
 
     my %ret = ();
     my $ret = \%ret;
 
-
     my @lines = @{ readFile($file) };
 
-    foreach my $line (@lines)
-    {
-        $line =~ s/\n//;  #remove newline characters
-        $line =~ s/\r//;  #remove newline characters
+    foreach my $line (@lines) {
+        $line =~ s/\n//;    #remove newline characters
+        $line =~ s/\r//;    #remove newline characters
         my $cur = trim($line);
-        if( length($cur) > 0)
-        {
-            if(substr($cur,0,1)ne"#")
-            {
-                my @s = split (/=/, $cur);
-                my $Name = shift @s;
-                my $Value = join('=', @s);
-                $$ret{ trim($Name)} = trim($Value);
+        if ( length($cur) > 0 ) {
+            if ( substr( $cur, 0, 1 ) ne "#" ) {
+                my @s     = split( /=/, $cur );
+                my $Name  = shift @s;
+                my $Value = join( '=', @s );
+                $$ret{ trim($Name) } = trim($Value);
             }
         }
     }
@@ -1427,137 +1384,126 @@ sub readConfFile
     return \%ret;
 }
 
-sub readFile
-{
-    my $file = shift;
-    my $trys=0;
-    my $failed=0;
+sub readFile {
+    my $file   = shift;
+    my $trys   = 0;
+    my $failed = 0;
     my @lines;
+
     #print "Attempting open\n";
-    if( -e $file )
-    {
-        my $worked = open (inputfile, '< '. $file);
-        if(!$worked)
-        {
+    if ( -e $file ) {
+        my $worked = open( inputfile, '< ' . $file );
+        if ( !$worked ) {
             print "******************Failed to read file*************\n";
         }
-        binmode(inputfile, ":utf8");
-        while (!(open (inputfile, '< '. $file)) && $trys<100)
-        {
+        binmode( inputfile, ":utf8" );
+        while ( !( open( inputfile, '< ' . $file ) ) && $trys < 100 ) {
             print "Trying again attempt $trys\n";
             $trys++;
             sleep(1);
         }
-        if($trys<100)
-        {
+        if ( $trys < 100 ) {
+
             #print "Finally worked... now reading\n";
             @lines = <inputfile>;
             close(inputfile);
         }
-        else
-        {
+        else {
             print "Attempted $trys times. COULD NOT READ FILE: $file\n";
         }
         close(inputfile);
     }
-    else
-    {
+    else {
         print "File does not exist: $file\n";
     }
     return \@lines;
 }
 
-sub trim
-{
+sub trim {
     my $string = shift;
     $string =~ s/^\s+//;
     $string =~ s/\s+$//;
     return $string;
 }
 
-sub chooseNewFileName
-{
+sub chooseNewFileName {
     my $path = shift;
     my $seed = shift;
-    my $ext = shift;
-    my $ret = "";
+    my $ext  = shift;
+    my $ret  = "";
 
-    $path = $path . '/' if(substr($path, length($path)-1, 1) ne '/');
+    $path = $path . '/' if ( substr( $path, length($path) - 1, 1 ) ne '/' );
 
-    if( -d $path)
-    {
-        my $num="";
+    if ( -d $path ) {
+        my $num = "";
         $ret = $path . $seed . $num . '.' . $ext;
-        while(-e $ret)
-        {
-            if($num eq "")
-            {
+        while ( -e $ret ) {
+            if ( $num eq "" ) {
                 $num = -1;
             }
             $num++;
             $ret = $path . $seed . $num . '.' . $ext;
         }
     }
-    else
-    {
+    else {
         $ret = 0;
     }
 
     return $ret;
 }
 
-sub makeTarGZ
-{
+sub makeTarGZ {
     print "taring...\n";
     my $dataref = shift;
-    my %res = $dataref ? %{$dataref} : ();
-    my @files = ();
-    while ((my $key, my $val) = each(%res))
-    {
-        my @thisRes = @{$val};
+    my %res     = $dataref ? %{$dataref} : ();
+    my @files   = ();
+    while ( ( my $key, my $val ) = each(%res) ) {
+        my @thisRes  = @{$val};
         my $filename = @thisRes[0];
-        print $filename ."\n";
+        print $filename . "\n";
         $filename =~ s/$baseTemp//g;
-        print $filename ."\n";
-        push (@files, $filename);
+        print $filename . "\n";
+        push( @files, $filename );
     }
-    my $dt = DateTime->now(time_zone => "local");
-    my $fdate = $dt->ymd;
-    my $filenameprefix = trim($conf{"filenameprefix"});
-    my $tarFileName = chooseNewFileName($conf{"archive"}, "$filenameprefix" . "_$fdate", "tar.gz");
-    my $systemCMD = "cd '$baseTemp' && tar -zcvf '$tarFileName' ";
-    $systemCMD .= "'$_' " foreach(@files);
-    log_write("Running\n$systemCMD", 1);
+    my $dt             = DateTime->now( time_zone => "local" );
+    my $fdate          = $dt->ymd;
+    my $filenameprefix = trim( $conf{"filenameprefix"} );
+    my $tarFileName    = chooseNewFileName( $conf{"archive"}, "$filenameprefix" . "_$fdate", "tar.gz" );
+    my $systemCMD      = "cd '$baseTemp' && tar -zcvf '$tarFileName' ";
+    $systemCMD .= "'$_' " foreach (@files);
+    log_write( "Running\n$systemCMD", 1 );
     my $worked = system($systemCMD);
     return $tarFileName if $worked eq '0';
     return 0;
 }
 
-sub send_sftp
-{
-    my $hostname = shift;
-    my $login = shift;
-    my $pass = shift;
+sub send_sftp {
+    my $hostname  = shift;
+    my $login     = shift;
+    my $pass      = shift;
     my $remotedir = shift;
-    my $fileRef = shift;
-    my @files = @{$fileRef} if $fileRef;
+    my $fileRef   = shift;
+    my @files     = @{$fileRef} if $fileRef;
 
-    log_write("**********SFTP starting -> $hostname with $login and $pass -> $remotedir", 1);
-    my $sftp = Net::SFTP->new($hostname, debug => 0, user => $login, password => $pass )
-    or return "Cannot connect to ".$hostname;
-    foreach my $file (@files)
-    {
-        my $dest = $remotedir ."/" . getBareFileName($file);
-        log_write("Sending file $file -> $dest", 1 );
-        $sftp->put($file, $dest)
-        or return "Sending file $file failed";
+    log_write( "**********SFTP starting -> $hostname with $login and $pass -> $remotedir", 1 );
+    my $sftp = Net::SFTP->new(
+        $hostname,
+        debug    => 0,
+        user     => $login,
+        password => $pass
+    ) or return "Cannot connect to " . $hostname;
+
+    foreach my $file (@files) {
+        my $dest = $remotedir . "/" . getBareFileName($file);
+        log_write( "Sending file $file -> $dest", 1 );
+        $sftp->put( $file, $dest )
+          or return "Sending file $file failed";
     }
-    log_write("**********SFTP session closed ***************", 1);
+    log_write( "**********SFTP session closed ***************", 1 );
     return 0;
 }
 
-sub email_setup
-{
+sub email_setup {
     my ( $from, $emailRecipientArrayRef, $errorFlag, $successFlag ) = @_;
 
     my $email = {
@@ -1570,10 +1516,9 @@ sub email_setup
     return email_setupFinalToList($email);
 }
 
-sub email_send
-{
+sub email_send {
     my ( $email, $subject, $body ) = @_;
-    
+
     my $message = Email::MIME->create(
         header_str => [
             From    => $email->{fromEmailAddress},
@@ -1596,10 +1541,9 @@ sub email_send
     print "Sent\n" if $debug;
 }
 
-sub email_reportSummary
-{
+sub email_reportSummary {
     my ( $email, $subject, $body, $attachmentRef ) = @_;
-    my @attachments   = ();
+    my @attachments = ();
     @attachments = @{$attachmentRef} if ( ref($attachmentRef) eq 'ARRAY' );
 
     my $characters = length($body);
@@ -1619,12 +1563,10 @@ sub email_reportSummary
     print "== BODY ==\n";
 
     my $fileSizeTotal = 0;
-    if ( $#attachments > -1 )
-    {
+    if ( $#attachments > -1 ) {
         print "== ATTACHMENT SUMMARY == \n";
 
-        foreach (@attachments)
-        {
+        foreach (@attachments) {
             $fileSizeTotal += -s $_;
             my $thisFileSize = ( -s $_ ) / 1024 / 1024;
             print "$_: ";
@@ -1641,13 +1583,13 @@ sub email_reportSummary
     }
 
     $fileSizeTotal += $bodySize;
-    print "!!!WARNING!!! Email (w/attachments) Exceeds Standard 25MB\n" if ( $fileSizeTotal > 25 );
+    print "!!!WARNING!!! Email (w/attachments) Exceeds Standard 25MB\n"
+      if ( $fileSizeTotal > 25 );
     print "\n";
 
 }
 
-sub email_deDupeEmailArray
-{
+sub email_deDupeEmailArray {
     my $email         = shift;
     my $emailArrayRef = shift;
     my @emailArray    = @{$emailArrayRef};
@@ -1656,8 +1598,7 @@ sub email_deDupeEmailArray
     my $pos           = 0;
     my @ret           = ();
 
-    foreach (@emailArray)
-    {
+    foreach (@emailArray) {
         my $thisEmail = $_;
 
         print "processing: '$thisEmail'\n" if $debug;
@@ -1675,21 +1616,18 @@ sub email_deDupeEmailArray
         print "normalized: '$thisEmail'\n" if $debug;
 
         $bareEmails{$thisEmail} = 1;
-        if ( !$posTracker{$thisEmail} )
-        {
+        if ( !$posTracker{$thisEmail} ) {
             my @a = ();
             $posTracker{$thisEmail} = \@a;
             print "adding: '$thisEmail'\n" if $debug;
         }
-        else
-        {
+        else {
             print "deduped: '$thisEmail'\n" if $debug;
         }
         push( @{ $posTracker{$thisEmail} }, $pos );
         $pos++;
     }
-    while ( ( my $email, my $value ) = each(%bareEmails) )
-    {
+    while ( ( my $email, my $value ) = each(%bareEmails) ) {
         my @a = @{ $posTracker{$email} };
 
         # just take the first occurance of the duplicate email
@@ -1699,14 +1637,13 @@ sub email_deDupeEmailArray
     return \@ret;
 }
 
-sub email_body
-{
+sub email_body {
     my $ret = <<'splitter';
 Dear staff,
 
 This is a LibraryIQ Evergreen export.
 
-This was a !!jobtype!! extraction. We gathered data starting from this date: !!startdate!!
+This was a *!!jobtype!!* extraction. We gathered data starting from this date: !!startdate!!
 
 Results:
 
@@ -1725,18 +1662,15 @@ splitter
 
 }
 
-sub email_setupFinalToList
-{
+sub email_setupFinalToList {
     my $email = shift;
-    my @ret  = ();
+    my @ret   = ();
 
     my @varMap = ( "successemaillist", "erroremaillist" );
 
-    foreach (@varMap)
-    {
+    foreach (@varMap) {
         my @emailList = split( /,/, $conf{$_} );
-        for my $y ( 0 .. $#emailList )
-        {
+        for my $y ( 0 .. $#emailList ) {
             @emailList[$y] = trim( @emailList[$y] );
         }
         $email->{$_} = \@emailList;
@@ -1745,9 +1679,11 @@ sub email_setupFinalToList
 
     undef @varMap;
 
-    push( @ret, @{ $email->{emailRecipientArray} } ) if ( $email->{emailRecipientArray}->[0] );
+    push( @ret, @{ $email->{emailRecipientArray} } )
+      if ( $email->{emailRecipientArray}->[0] );
 
-    push( @ret, @{ $email->{successemaillist} } ) if ( $email->{'notifySuccess'} );
+    push( @ret, @{ $email->{successemaillist} } )
+      if ( $email->{'notifySuccess'} );
 
     push( @ret, @{ $email->{erroremaillist} } ) if ( $email->{'notifyError'} );
 
@@ -1763,29 +1699,26 @@ sub email_setupFinalToList
     return $email;
 }
 
-sub getBareFileName
-{
+sub getBareFileName {
     my $fullFile = shift;
-    my @s = split(/\//, $fullFile);
+    my @s        = split( /\//, $fullFile );
     return pop @s;
 }
 
-sub getDBconnects
-{
+sub getDBconnects {
     my $openilsfile = shift;
-    my $xml = new XML::Simple;
-    my $data = $xml->XMLin($openilsfile);
+    my $xml         = new XML::Simple;
+    my $data        = $xml->XMLin($openilsfile);
     my %conf;
-    $conf{"dbhost"}=$data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{host};
-    $conf{"db"}=$data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{db};
-    $conf{"dbuser"}=$data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{user};
-    $conf{"dbpass"}=$data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{pw};
-    $conf{"port"}=$data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{port};
+    $conf{"dbhost"} = $data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{host};
+    $conf{"db"}     = $data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{db};
+    $conf{"dbuser"} = $data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{user};
+    $conf{"dbpass"} = $data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{pw};
+    $conf{"port"}   = $data->{default}->{apps}->{"open-ils.storage"}->{app_settings}->{databases}->{database}->{port};
     ##print Dumper(\%conf);
     return \%conf;
 
 }
 
 exit;
-
 
