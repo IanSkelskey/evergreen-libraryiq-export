@@ -28,7 +28,7 @@ Defaults to: /openils/conf/opensrf.xml
 
 This flag will cause the software to drop and recreate the database schema. It uses a schema named "libraryiq"
 It might be a good idea to use this flag if this script receives an update from git. There might be tweaks to
-the DB funcations that will need to get applied to your system.
+the DB functions that will need to get applied to your system.
 
 ### full
 
