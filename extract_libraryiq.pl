@@ -57,8 +57,6 @@ setupDB();
 
 start();
 
-
-
 sub start {
 
     log_write(" ---------------- Script Starting ---------------- ", 1);
@@ -73,7 +71,6 @@ sub start {
 
     checkHistory($pgLibs);
     my @loops = ( qw/bibs items circs patrons holds/ );
-    # my @loops = ( qw/patrons items/ );
     my %res = ();
     $res{$_} = makeDataFile($_, $pgLibs) foreach @loops;
     log_write(Dumper(\%res));
@@ -95,7 +92,7 @@ sub start {
         my $rcount = @thisRes[1];
         $filecount++;
         push (@files, $filename) if(!$tarFile);
-        unlink $filename or warn "Could not remove $_\n" if($tarFile);
+        unlink $filename or warn "Could not remove $filename\n" if($tarFile);
         $filename = getBareFileName($filename);
         $filedetails .= "$key [$filename]\t\t$rcount record(s)\n";
     }
@@ -111,13 +108,23 @@ sub start {
     $body =~ s/::TIMESTAMPTZ//g;
 
     my $ftpFail = send_sftp($conf{"ftphost"}, $conf{"ftplogin"}, $conf{"ftppass"}, $conf{"remote_directory"}, \@files);
+
+    if (!$tarFile)
+    {
+        foreach(@files)
+        {
+            my $destFile =  getBareFileName($_);
+            my $cmd = "mv '$_' '" .$conf{"archive"} . "/$destFile'";
+            log_write("Running: $cmd", 1);
+            system($cmd);
+        }
+    }
     my $subject = trim($conf{"emailsubjectline"});
     $subject .= ' - FTP FAIL' if $ftpFail;
     $body = "$ftpFail" if $ftpFail;
     my @tolist = ($conf{"alwaysemail"});
     my $email;
-    $email = email_setup($conf{"fromemail"}, \@tolist, 1, 0, $conf{"erroremaillist"}, $conf{"successemaillist"}) if $ftpFail;
-    $email = email_setup($conf{"fromemail"}, \@tolist, 0, 1, $conf{"erroremaillist"}, $conf{"successemaillist"}) if !$ftpFail;;
+    $email = email_setup($conf{"fromemail"}, \@tolist, $ftpFail, !$ftpFail, $conf{"erroremaillist"}, $conf{"successemaillist"});
     email_send($email, $subject, $body);
 
     log_write(" ---------------- Script Ending ---------------- ", 1);
@@ -138,10 +145,9 @@ sub makeDataFile
         'patrons' => {"chunk" => "getSQLFunctionChunk", "ids" => "getPatronIDs"},
         'holds' => {"chunk" => "getSQLFunctionChunk", "ids" => "getHoldIDs"},
     );
-    
 
     my $filenameprefix = trim($conf{"filenameprefix"}) . '_' . $jobtype . '_' . $type;
-    my $limit = $conf{'chunksize'} || 10000;
+    my $limit = $conf{'chunksize'} || 500;
     my $offset = 0;
     my $file = chooseNewFileName($baseTemp, $filenameprefix . "_".$fdate, "tsv");
     print "Creating: $file\n";
@@ -1541,9 +1547,7 @@ sub send_sftp
     or return "Cannot connect to ".$hostname;
     foreach my $file (@files)
     {
-        my @s = split(/\//,$file);
-        my $dest = pop @s;
-        $dest = $remotedir ."/$dest";
+        my $dest = $remotedir ."/" . getBareFileName($file);
         log_write("Sending file $file -> $dest", 1 );
         $sftp->put($file, $dest)
         or return "Sending file $file failed";
