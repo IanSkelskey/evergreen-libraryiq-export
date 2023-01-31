@@ -172,8 +172,7 @@ sub makeDataFile {
         writeData( \@data, $fileHandle );
         $offset += $limit;
 
-        # eval $perlIDEval;
-        @ids = ();
+        eval $perlIDEval;
         undef $perlChunkCode;
         undef $h;
     }
