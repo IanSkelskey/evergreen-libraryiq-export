@@ -945,7 +945,7 @@ splitter
       RETURNS table ( patronid BIGINT, exiration_date TEXT, patron_branch TEXT,
       patron_status TEXT, patron_circ_ytd BIGINT, patron_prev_year_circ_count BIGINT,
       patron_circ_count BIGINT, patron_last_active TEXT, patron_last_checkout_date TEXT,
-      patron_create_date TEXT, street1 TEXT, street2 TEXT, city TEXT, zip TEXT) AS
+      patron_create_date TEXT, street1 TEXT, street2 TEXT, city TEXT, state TEXT, zip TEXT) AS
     $BODY$
 
       DECLARE
@@ -975,7 +975,7 @@ splitter
               INTO
               patronid, exiration_date, patron_branch, patron_status,
               patron_circ_ytd, patron_prev_year_circ_count, patron_circ_count, patron_last_active,
-              patron_last_checkout_date, patron_create_date, street1, street2, city, zip
+              patron_last_checkout_date, patron_create_date, street1, street2, city, state, zip
               FROM
               actor.usr au
               JOIN actor.org_unit aou ON (aou.id=au.home_ou)
