@@ -262,6 +262,10 @@ sub getCircIDs {
     my $limit  = shift;
     my $offset = shift;
     my @ret    = ();
+
+    # libraryIQ only wants the last 3 years on a full load
+    my $thisCompareDate = $lastUpdatePGDate;
+    $thisCompareDate = "(now() - '3 years'::interval)" if ($full);
     my $query  = "
     SELECT acirc.id
     FROM
@@ -271,7 +275,7 @@ sub getCircIDs {
     JOIN asset.call_number acn on(acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
     WHERE
     acn.owning_lib in( $pgLibs ) AND
-    acirc.xact_start > $lastUpdatePGDate
+    acirc.xact_start > $thisCompareDate
     GROUP BY 1
     ORDER BY 1";
     log_write($query) if $debug;
@@ -1272,7 +1276,9 @@ sub dedupeArray {
 sub checkHistory {
     my $libs    = shift;
     my $key     = makeLibKey($libs);
-    my $query   = "SELECT id,last_run FROM libraryiq.history WHERE key = \$1";
+    # subtracting 5 hours for a little insurance that we cover any run time from the previous run
+    my $query   = "SELECT id, (CASE WHEN last_run IS NOT NULL THEN (last_run - '5 hours'::INTERVAL) ELSE NULL END) FROM libraryiq.history WHERE key = \$1";
+    log_write($query) if $debug;
     my @vals    = ($key);
     my @results = @{ dbhandler_query( $query, \@vals ) };
     pop @results;
