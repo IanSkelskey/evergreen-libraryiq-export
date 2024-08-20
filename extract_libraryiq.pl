@@ -269,7 +269,7 @@ sub getCircIDs {
     my $query  = "
     SELECT acirc.id
     FROM
-    action.circulation acirc
+    action.all_circulation acirc
     JOIN actor.usr au ON (acirc.usr=au.id)
     JOIN asset.copy ac ON (ac.id=acirc.target_copy)
     JOIN asset.call_number acn on(acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
@@ -877,11 +877,11 @@ splitter
               JOIN asset.call_number_prefix acnp ON (acnp.id=acn.prefix)
               JOIN asset.call_number_suffix acns ON (acns.id=acn.suffix)
               JOIN config.copy_status ccs ON (ccs.id=ac.status)
-              LEFT JOIN (SELECT COUNT(*) "ytdcirccount" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid AND date_part('year', acirc2.xact_start) = date_part('year', now()) ) ytd ON (1=1)
-              LEFT JOIN (SELECT MAX(acirc2.xact_start) "lastcheckout" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid AND acirc2.xact_start IS NOT NULL) chkoutdate ON (1=1)
-              LEFT JOIN (SELECT MAX(acirc2.xact_finish) "lastcheckin" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid AND acirc2.xact_finish IS NOT NULL) chkindate ON (1=1)
-              LEFT JOIN (SELECT MAX(acirc2.due_date) "due" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid AND acirc2.xact_finish IS NULL) duedate ON (1=1)
-              LEFT JOIN (SELECT COUNT(*) "tcirccount" FROM action.circulation acirc2 WHERE acirc2.target_copy=cid) circcount ON (1=1)
+              LEFT JOIN (SELECT COUNT(*) "ytdcirccount" FROM action.all_circulation acirc2 WHERE acirc2.target_copy=cid AND date_part('year', acirc2.xact_start) = date_part('year', now()) ) ytd ON (1=1)
+              LEFT JOIN (SELECT MAX(acirc2.xact_start) "lastcheckout" FROM action.all_circulation acirc2 WHERE acirc2.target_copy=cid AND acirc2.xact_start IS NOT NULL) chkoutdate ON (1=1)
+              LEFT JOIN (SELECT MAX(acirc2.xact_finish) "lastcheckin" FROM action.all_circulation acirc2 WHERE acirc2.target_copy=cid AND acirc2.xact_finish IS NOT NULL) chkindate ON (1=1)
+              LEFT JOIN (SELECT MAX(acirc2.due_date) "due" FROM action.all_circulation acirc2 WHERE acirc2.target_copy=cid AND acirc2.xact_finish IS NULL) duedate ON (1=1)
+              LEFT JOIN (SELECT COUNT(*) "tcirccount" FROM action.all_circulation acirc2 WHERE acirc2.target_copy=cid) circcount ON (1=1)
               WHERE
               ac.id=cid;
             RETURN NEXT;
@@ -924,7 +924,7 @@ splitter
               copyid, barcode, bibid,  checkout_date,
               checkout_branch, patron_id, due_date, checkin_date
               FROM
-              action.circulation acirc
+              action.all_circulation acirc
               JOIN asset.copy ac ON (ac.id=acirc.target_copy)
               JOIN asset.call_number acn ON (acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
               LEFT JOIN asset.copy_location acl ON (acl.id=ac.location)
@@ -983,11 +983,11 @@ splitter
               FROM
               actor.usr au
               JOIN actor.org_unit aou ON (aou.id=au.home_ou)
-              LEFT JOIN (SELECT COUNT(*) "ytdcirccount" FROM action.circulation acirc2 WHERE acirc2.usr=pid AND date_part('year', xact_start) = date_part('year', now()) ) ytd ON (1=1)
-              LEFT JOIN (SELECT COUNT(*) "prvyearcirccount" FROM action.circulation acirc2 WHERE acirc2.usr=pid AND (date_part('year', xact_start)::INT - 1) = (date_part('year', now())::INT - 1) ) prevytd ON (1=1)
-              LEFT JOIN (SELECT COUNT(*) "tcirccount" FROM action.circulation acirc2 WHERE acirc2.usr=pid ) circcount ON (1=1)
+              LEFT JOIN (SELECT COUNT(*) "ytdcirccount" FROM action.all_circulation acirc2 WHERE acirc2.usr=pid AND date_part('year', xact_start) = date_part('year', now()) ) ytd ON (1=1)
+              LEFT JOIN (SELECT COUNT(*) "prvyearcirccount" FROM action.all_circulation acirc2 WHERE acirc2.usr=pid AND (date_part('year', xact_start)::INT - 1) = (date_part('year', now())::INT - 1) ) prevytd ON (1=1)
+              LEFT JOIN (SELECT COUNT(*) "tcirccount" FROM action.all_circulation acirc2 WHERE acirc2.usr=pid ) circcount ON (1=1)
               LEFT JOIN (SELECT MAX(event_time) "lastact" FROM actor.usr_activity aua WHERE aua.usr=pid ) usr_activity ON (1=1)
-              LEFT JOIN (SELECT MAX(xact_start) "lastcirc" FROM action.circulation acirc2 WHERE acirc2.usr=pid ) last_usr_checkout ON (1=1)
+              LEFT JOIN (SELECT MAX(xact_start) "lastcirc" FROM action.all_circulation acirc2 WHERE acirc2.usr=pid ) last_usr_checkout ON (1=1)
               LEFT JOIN (SELECT MAX(id) "id" FROM actor.usr_address auaddress WHERE auaddress.usr=pid AND auaddress.address_type='MAILING' ) auaa ON (1=1)
               LEFT JOIN (SELECT auadd.id,auadd.street1,auadd.street2,auadd.city,auadd.state,auadd.post_code FROM actor.usr_address auadd WHERE auadd.usr=pid ) addr ON (addr.id=auaa.id)
               WHERE
