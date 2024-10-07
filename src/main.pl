@@ -17,14 +17,11 @@
 use strict;
 
 use Getopt::Long;
-use DBD::Pg;
-use Net::SFTP;
 use Data::Dumper;
 use XML::Simple;
 use DateTime;
 use utf8;
 use Encode;
-use Email::MIME;
 
 our $configFile;
 our $debug   = 0;

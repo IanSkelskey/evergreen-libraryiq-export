@@ -1,3 +1,9 @@
+package SFTPHandler;
+
+use strict;
+use warnings;
+use Net::SFTP::Foreign;
+
 sub send_sftp {
     my $hostname  = shift;
     my $login     = shift;

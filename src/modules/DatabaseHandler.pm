@@ -1,3 +1,10 @@
+package DatabaseHandler;
+
+use strict;
+use warnings;
+use DBI;
+use DBD::Pg;
+
 sub setupDB {
 
     my %dbconf = %{ getDBconnects($xmlconf) };

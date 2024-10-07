@@ -1,3 +1,10 @@
+package EmailHandler;
+
+use strict;
+use warnings;
+use Email::MIME;
+use Email::Sender::Simple qw(sendmail);
+
 sub email_setup {
     my ( $from, $emailRecipientArrayRef, $errorFlag, $successFlag ) = @_;
 

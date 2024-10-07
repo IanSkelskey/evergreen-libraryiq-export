@@ -1,3 +1,8 @@
+package ConfigurationHandler;
+
+use strict;
+use warnings;
+
 sub readConfFile {
     my $file = shift;
 

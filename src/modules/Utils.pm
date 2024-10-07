@@ -1,3 +1,8 @@
+package Utils;
+
+use strict;
+use warnings;
+
 sub dedupeArray {
     my $arrRef  = shift;
     my @arr     = $arrRef ? @{$arrRef} : ();
