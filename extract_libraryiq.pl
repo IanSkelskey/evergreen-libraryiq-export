@@ -988,7 +988,7 @@ splitter
               LEFT JOIN (SELECT COUNT(*) "tcirccount" FROM action.all_circulation acirc2 WHERE acirc2.usr=pid ) circcount ON (1=1)
               LEFT JOIN (SELECT MAX(event_time) "lastact" FROM actor.usr_activity aua WHERE aua.usr=pid ) usr_activity ON (1=1)
               LEFT JOIN (SELECT MAX(xact_start) "lastcirc" FROM action.all_circulation acirc2 WHERE acirc2.usr=pid ) last_usr_checkout ON (1=1)
-              LEFT JOIN (SELECT MAX(id) "id" FROM actor.usr_address auaddress WHERE auaddress.usr=pid AND auaddress.address_type='MAILING' ) auaa ON (1=1)
+              LEFT JOIN (SELECT MAX(id) AS "id" FROM actor.usr_address auaddress WHERE auaddress.usr = pid) auaa ON (1=1)
               LEFT JOIN (SELECT auadd.id,auadd.street1,auadd.street2,auadd.city,auadd.state,auadd.post_code FROM actor.usr_address auadd WHERE auadd.usr=pid ) addr ON (addr.id=auaa.id)
               WHERE
               au.id=pid;
