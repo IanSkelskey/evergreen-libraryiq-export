@@ -270,7 +270,7 @@ sub getCircIDs {
     SELECT acirc.id
     FROM
     action.all_circulation acirc
-    JOIN actor.usr au ON (acirc.usr=au.id)
+    LEFT JOIN actor.usr au ON (acirc.usr=au.id)
     JOIN asset.copy ac ON (ac.id=acirc.target_copy)
     JOIN asset.call_number acn on(acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
     WHERE
@@ -928,7 +928,7 @@ splitter
               JOIN asset.copy ac ON (ac.id=acirc.target_copy)
               JOIN asset.call_number acn ON (acn.id=ac.call_number AND NOT ac.deleted AND NOT acn.deleted)
               LEFT JOIN asset.copy_location acl ON (acl.id=ac.location)
-              JOIN actor.usr au ON (acirc.usr=au.id)
+              LEFT JOIN actor.usr au ON (acirc.usr=au.id)
               JOIN actor.org_unit aou_circ ON (acirc.circ_lib=aou_circ.id)
               WHERE
               acirc.id=cid;
