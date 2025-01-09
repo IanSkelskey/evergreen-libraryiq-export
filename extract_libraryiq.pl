@@ -106,20 +106,20 @@ sub start {
     $body =~ s/!!remotedir!!/$conf{"remote_directory"}/g;
     $body =~ s/::TIMESTAMPTZ//g;
 
-    my $ftpFail =
-      send_sftp( $conf{"ftphost"}, $conf{"ftplogin"}, $conf{"ftppass"}, $conf{"remote_directory"}, \@files );
+    # my $ftpFail =
+    #   send_sftp( $conf{"ftphost"}, $conf{"ftplogin"}, $conf{"ftppass"}, $conf{"remote_directory"}, \@files );
 
-    if ( !$tarFile ) {
-        foreach (@files) {
-            my $destFile = getBareFileName($_);
-            my $cmd      = "mv '$_' '" . $conf{"archive"} . "/$destFile'";
-            log_write( "Running: $cmd", 1 );
-            system($cmd);
-        }
-    }
+    # if ( !$tarFile ) {
+    #     foreach (@files) {
+    #         my $destFile = getBareFileName($_);
+    #         my $cmd      = "mv '$_' '" . $conf{"archive"} . "/$destFile'";
+    #         log_write( "Running: $cmd", 1 );
+    #         system($cmd);
+    #     }
+    # }
     my $subject = trim( $conf{"emailsubjectline"} );
-    $subject .= ' - FTP FAIL' if $ftpFail;
-    $body = "$ftpFail" if $ftpFail;
+    # $subject .= ' - FTP FAIL' if $ftpFail;
+    # $body = "$ftpFail" if $ftpFail;
     my @tolist = ( $conf{"alwaysemail"} );
     my $email;
     $email = email_setup( $conf{"fromemail"}, \@tolist, $ftpFail, !$ftpFail,
