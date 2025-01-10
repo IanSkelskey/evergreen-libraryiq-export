@@ -57,9 +57,11 @@ setupDB();
 start();
 
 sub start {
-
     log_write( " ---------------- Script Starting ---------------- ", 1 );
     print "Executing job tail the log for information (" . $conf{"logfile"} . ")\n";
+
+    my $start_time = DateTime->now( time_zone => "local" );
+    log_write( "Start time: " . $start_time->ymd . ' ' . $start_time->hms, 1 );
 
     $baseTemp = $conf{"tempdir"};
     $baseTemp =~ s/\/$//;
@@ -126,6 +128,9 @@ sub start {
     # $email = email_setup( $conf{"fromemail"}, \@tolist, $ftpFail, !$ftpFail,
     #     $conf{"erroremaillist"}, $conf{"successemaillist"} );
     # email_send( $email, $subject, $body );
+
+    my $end_time = DateTime->now( time_zone => "local" );
+    log_write( "End time: " . $start_time->ymd . ' ' . $start_time->hms, 1 );
 
     log_write( " ---------------- Script Ending ---------------- ", 1 );
     close($log);
