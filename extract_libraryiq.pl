@@ -77,6 +77,7 @@ sub start {
     my $tarFile;
     my $tarFileBareFileName;
     $tarFile = makeTarGZ( \%res ) if ( $conf{"compressoutput"} );
+    log_write("Tar file created at: $tarFile") if ($tarFile);
 
     my $filecount   = 0;
     my $filedetails = '';
@@ -97,14 +98,14 @@ sub start {
     $filedetails .= "\nThese were compressed into '$tarFileBareFileName'"
       if $tarFile;
 
-    my $body = email_body();
-    $body =~ s/!!jobtype!!/$jobtype/g;
-    $body =~ s/!!filedetails!!/$filedetails/g;
-    $body =~ s/!!filecount!!/$filecount/g;
-    $body =~ s/!!startdate!!/$lastUpdatePGDate/g;
-    $body =~ s/!!trasnferhost!!/$conf{"ftphost"}/g;
-    $body =~ s/!!remotedir!!/$conf{"remote_directory"}/g;
-    $body =~ s/::TIMESTAMPTZ//g;
+    # my $body = email_body();
+    # $body =~ s/!!jobtype!!/$jobtype/g;
+    # $body =~ s/!!filedetails!!/$filedetails/g;
+    # $body =~ s/!!filecount!!/$filecount/g;
+    # $body =~ s/!!startdate!!/$lastUpdatePGDate/g;
+    # $body =~ s/!!trasnferhost!!/$conf{"ftphost"}/g;
+    # $body =~ s/!!remotedir!!/$conf{"remote_directory"}/g;
+    # $body =~ s/::TIMESTAMPTZ//g;
 
     # my $ftpFail =
     #   send_sftp( $conf{"ftphost"}, $conf{"ftplogin"}, $conf{"ftppass"}, $conf{"remote_directory"}, \@files );
@@ -117,14 +118,14 @@ sub start {
     #         system($cmd);
     #     }
     # }
-    my $subject = trim( $conf{"emailsubjectline"} );
+    # my $subject = trim( $conf{"emailsubjectline"} ); # TODO: Remove email functionality for testing
     # $subject .= ' - FTP FAIL' if $ftpFail;
     # $body = "$ftpFail" if $ftpFail;
-    my @tolist = ( $conf{"alwaysemail"} );
-    my $email;
-    $email = email_setup( $conf{"fromemail"}, \@tolist, $ftpFail, !$ftpFail,
-        $conf{"erroremaillist"}, $conf{"successemaillist"} );
-    email_send( $email, $subject, $body );
+    # my @tolist = ( $conf{"alwaysemail"} );
+    # my $email;
+    # $email = email_setup( $conf{"fromemail"}, \@tolist, $ftpFail, !$ftpFail,
+    #     $conf{"erroremaillist"}, $conf{"successemaillist"} );
+    # email_send( $email, $subject, $body );
 
     log_write( " ---------------- Script Ending ---------------- ", 1 );
     close($log);
